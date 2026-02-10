@@ -1,76 +1,117 @@
-Edge Face Recognition System: Setup & Usage
+# 🧠 Edge-Optimized Face Recognition System
 
-This project is a high-performance, background-agnostic face recognition pipeline optimized for Edge devices. It utilizes EdgeFace-XS and MediaPipe BlazeFace with custom elliptical masking and multi-profile pose clustering.
-🛠️ Installation
-1. Clone & Environment
+A high-performance, background-agnostic face recognition pipeline
+optimized for **Edge devices**. This system utilizes the **EdgeFace-XS**
+architecture and **MediaPipe BlazeFace** to provide robust identity
+verification with minimal resource overhead.
 
-Open your terminal and run the following commands to set up a dedicated virtual environment:
-Bash
+------------------------------------------------------------------------
 
+## 🚀 Key Technical Features
+
+-   **Elliptical Masking:** Mitigates background noise and environmental
+    bias by focusing the model exclusively on the facial manifold.\
+-   **Multi-Profile Identity (Pose Manifold Clustering):** Captures
+    Frontal, Left, and Right pose-centroids to ensure accuracy remains
+    high even during head movement.\
+-   **Identity Stabilization:** Utilizes a 12-frame hysteresis buffer
+    and temporal smoothing to prevent identity "flickering."\
+-   **Box Smoothing (Lerp):** Implements Linear Interpolation for
+    bounding box coordinates to reduce visual jitter during detection.
+
+------------------------------------------------------------------------
+
+## 🛠️ Setup & Installation
+
+### 1. Environment Setup
+
+Clone the repository and create a clean Python virtual environment:
+
+``` bash
 git clone https://github.com/YOUR_USERNAME/Test_Face.git
 cd Test_Face
-python -m venv face_edge_env
-source face_edge_env/bin/activate  # Windows: face_edge_env\Scripts\activate
+python -m venv face_edge
+source face_edge/bin/activate  # On Windows: face_edge\Scripts\activate
+```
 
-2. Install Dependencies
-Bash
+------------------------------------------------------------------------
 
+### 2. Install Dependencies
+
+Ensure you are using the optimized versions for edge performance:
+
+``` bash
 pip install -r requirements.txt
+```
 
-3. Model Setup
+------------------------------------------------------------------------
 
-Create a models/ folder and place your ONNX model and its weights inside:
-Plaintext
+### 3. Model Configuration
 
+Create a `models/` directory and place your ONNX model and weight file
+inside.
+
+> **Note:** ONNX Runtime requires the `.data` file to be in the same
+> folder as the `.onnx` file.
+
+``` text
 models/
 ├── edgeface_xs_gamma_06.onnx
 └── edgeface_xs_gamma_06.onnx.data
+```
 
-💻 Usage Instructions
-Step 1: Hardware Discovery
+------------------------------------------------------------------------
 
-Identify the correct camera index for your webcam (especially if using an external USB camera).
-Bash
+## 💻 Usage Instructions
 
+### Step 1: Hardware Discovery
+
+Identify the correct camera index for your webcam (crucial for external
+USB devices):
+
+``` bash
 python camera_rec.py
+```
 
-Update the CAMERA_INDEX in config.py based on the output.
-Step 2: Multi-Phase Enrollment
+Update the `CAMERA_INDEX` in `config.py` based on the script's output.
 
-Run the enrollment script to capture your facial features from multiple angles to handle head rotation.
-Bash
+------------------------------------------------------------------------
 
+### Step 2: Multi-Phase Enrollment
+
+Enroll your identity by capturing your face from three distinct angles.
+This prevents **centroid shift** and ensures accuracy regardless of head
+pose.
+
+``` bash
 python enroll_multi_profile.py
+```
 
-    Enter your name when prompted.
+**Enrollment Phases**
 
-    The script will guide you through three phases: FRONTAL, LEFT PROFILE, and RIGHT PROFILE.
+-   **Phase 1 (Frontal):** Look directly at the camera.\
+-   **Phase 2 (Left):** Turn your head slightly to the left.\
+-   **Phase 3 (Right):** Turn your head slightly to the right.
 
-    Position your head accordingly and press 's' to begin capturing each phase.
+👉 Press **`s`** to start or advance each phase.
 
-    Once completed, the script saves three distinct .npy files in data/face_db/.
+------------------------------------------------------------------------
 
-Step 3: Database Verification (Optional)
+### Step 3: Database Verification (Optional)
 
-Check the mathematical separation between enrolled users:
-Bash
+Check the mathematical separation between enrolled users to ensure
+identities are distinct and the threshold is appropriate.
 
+``` bash
 python check_db.py
+```
 
-A score below 0.60 indicates a healthy separation between identities.
-Step 4: Real-Time Benchmarking
+------------------------------------------------------------------------
 
-Launch the main recognition engine:
-Bash
+### Step 4: Real-Time Benchmarking
 
+Launch the primary inference engine to test the recognition system:
+
+``` bash
 python benchmark_multi_profile.py
-
-    Stability: Uses Lerp (Linear Interpolation) to smooth the bounding box and a 12-frame buffer to stabilize identity.
-
-    Security: Displays a warning and pauses if multiple faces are detected in the frame.
-
-⌨️ Controls
-
-    's': Start/Continue enrollment phases.
-
-    'q': Quit any running script.
+```
