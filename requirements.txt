@@ -1,16 +1,21 @@
-# Computer Vision & Detection
-opencv-python==4.8.1.78
-mediapipe
+# --- Web Server (Full-Stack) ---
+fastapi
+uvicorn
+python-multipart
 
-# Math & Logic
-numpy
+# --- Computer Vision & Detection ---
+# Note: We use contrib-python for extra features and compatibility
+opencv-contrib-python<=4.10.0.84
+mediapipe>=0.10.0
 
-# Inference Engine
-onnxruntime==1.23.2
+# --- AI & Inference ---
+# Note: Numpy must be kept below 2.0.0 to prevent MediaPipe internal crashes
+numpy<2.0.0
+onnxruntime
+scikit-image
+protobuf<4.25.3
 
-# System Tracking
+# --- System & Utilities ---
 psutil==7.2.2
-
-# Utilities (if used for data analysis)
 polars==1.37.1
 tqdm==4.67.2
