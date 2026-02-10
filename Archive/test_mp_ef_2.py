@@ -17,7 +17,7 @@ THRESHOLD = 0.50  # Similarity score needed to confirm identity
 
 # 1. Initialize EdgeFace
 device = torch.device('cpu')
-model_name = "edgeface_xs_q_06"
+model_name = "edgeface_xs_gamma_06"
 model = get_model(model_name)
 model.load_state_dict(torch.load(f'checkpoints/{model_name}.pt', map_location=device))
 model.eval()

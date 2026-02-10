@@ -67,7 +67,7 @@ def get_embedding_onnx(img_bgr):
     cv2.ellipse(mask, (56, 56), (45, 58), 0, 0, 360, 255, -1)
     img_masked = cv2.bitwise_and(img_resized, img_resized, mask=mask)
 
-    # VISUAL VERIFICATION: This should now look perfectly still
+
     cv2.imshow("What the AI Sees", img_masked) 
 
     img_rgb = cv2.cvtColor(img_masked, cv2.COLOR_BGR2RGB)

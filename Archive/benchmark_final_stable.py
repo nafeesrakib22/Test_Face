@@ -17,10 +17,10 @@ ONNX_MODEL_PATH = "edgeface_xs_gamma_06.onnx"
 DB_PATH = 'data/face_db'
 CSV_FILE = "benchmark_stable.csv"
 THRESHOLD = 0.65  
-STABILITY_FRAMES = 10  # Wait 5 frames before even trying to recognize
+STABILITY_FRAMES = 10  # Wait  before even trying to recognize
 BUFFER_SIZE = 8       # [NEW] Number of frames to vote on (Smoothing)
 
-# --- CLASS: IDENTITY STABILIZER (The Fix) ---
+#  CLASS: IDENTITY STABILIZER  to prevent flickering
 class IdentityStabilizer:
     def __init__(self, maxlen=10):
         self.history = deque(maxlen=maxlen)
@@ -69,9 +69,9 @@ def get_embedding_onnx(img_bgr):
     cv2.ellipse(mask, (56, 56), (45, 58), 0, 0, 360, 255, -1)
     img_resized = cv2.bitwise_and(img_resized, img_resized, mask=mask)
 
-    # --- ADD THIS LINE TO VERIFY ---
+    # For ensuring face is properly detected
     cv2.imshow("What the AI Sees", img_resized) 
-    # -------------------------------
+    # Preprocessing 
 
     img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
     img_float = img_rgb.astype(np.float32) / 255.0
@@ -111,6 +111,7 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 process = psutil.Process(os.getpid())
 stability_counter = 0
+
 
 while cap.isOpened():
     success, frame = cap.read()
@@ -165,7 +166,7 @@ while cap.isOpened():
                     else:
                         raw_user = "Unknown"
                         
-                    # 3. SMOOTHING (The Magic)
+                    # 3. SMOOTHING 
                     display_user = stabilizer.update(raw_user, confidence)
                     
                     # 4. Display Logic
