@@ -1,0 +1,16 @@
+# Computer Vision & Detection
+opencv-python==4.8.1.78
+mediapipe
+
+# Math & Logic
+numpy
+
+# Inference Engine
+onnxruntime==1.23.2
+
+# System Tracking
+psutil==7.2.2
+
+# Utilities (if used for data analysis)
+polars==1.37.1
+tqdm==4.67.2

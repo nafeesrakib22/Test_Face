@@ -1,0 +1,19 @@
+
+# Ignore benchmark logs
+*.csv 
+
+# Python environment
+# Python environment
+__pycache__/
+venv/
+.env 
+face_edge_env/
+face_edge/        
+face_edge_lib/
+
+# Ignore Large PyTorch/YOLO models from
+*.pt
+yolov8n.pt
+checkpoints/
+# Ignore lock files (from LibreOffice/Excel)
+.~lock.*
