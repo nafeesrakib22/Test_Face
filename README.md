@@ -1,117 +1,109 @@
 # 🧠 Edge-Optimized Face Recognition System
 
-A high-performance, background-agnostic face recognition pipeline
-optimized for **Edge devices**. This system utilizes the **EdgeFace-XS**
-architecture and **MediaPipe BlazeFace** to provide robust identity
-verification with minimal resource overhead.
+A high-performance, background-agnostic face recognition pipeline optimized for **Edge devices**. This system utilizes the **EdgeFace-XS** architecture and **MediaPipe Tasks API** to provide robust identity verification with minimal resource overhead.
 
-------------------------------------------------------------------------
+---
 
 ## 🚀 Key Technical Features
 
--   **Elliptical Masking:** Mitigates background noise and environmental
-    bias by focusing the model exclusively on the facial manifold.\
--   **Multi-Profile Identity (Pose Manifold Clustering):** Captures
-    Frontal, Left, and Right pose-centroids to ensure accuracy remains
-    high even during head movement.\
--   **Identity Stabilization:** Utilizes a 12-frame hysteresis buffer
-    and temporal smoothing to prevent identity "flickering."\
--   **Box Smoothing (Lerp):** Implements Linear Interpolation for
-    bounding box coordinates to reduce visual jitter during detection.
+- **Elliptical Masking:** Mitigates background noise and environmental bias by focusing the model exclusively on the facial manifold.
+- **Multi-Profile Identity (Pose Manifold Clustering):** Captures Frontal, Left, and Right pose-centroids to ensure accuracy remains high even during head movement.
+- **Identity Stabilization:** Utilizes a 12-frame hysteresis buffer and temporal smoothing to prevent identity "flickering."
+- **Single-Face Enforcement:** Security logic that denies access and provides visual warnings if multiple faces are detected in the frame.
+- **Box Smoothing (Lerp):** Implements Linear Interpolation for bounding box coordinates to reduce visual jitter during detection.
 
-------------------------------------------------------------------------
+---
+
+## 📂 Project Structure
+
+```text
+Test_Face/
+├── backend/
+│   ├── main.py                # FastAPI Backend + AI Inference
+│   ├── models/                # ONNX and TFLite models
+│   └── data/face_db/          # Enrolled biometric templates (.npy)
+├── frontend/
+│   ├── src/                   # React Components & Logic
+│   ├── public/
+│   └── package.json           # Node.js dependencies
+└── face_edge_env/             # Python Virtual Environment
+```
+
+---
 
 ## 🛠️ Setup & Installation
 
-### 1. Environment Setup
+### 1️⃣ Backend Environment (Python)
 
-Clone the repository and create a clean Python virtual environment:
-
-``` bash
-git clone https://github.com/YOUR_USERNAME/Test_Face.git
-cd Test_Face
-python -m venv face_edge
-source face_edge/bin/activate  # On Windows: face_edge\Scripts\activate
+```bash
+cd ~/Documents/Test_Face
+source face_edge_env/bin/activate
+pip install -r backend/requirements.txt
 ```
 
-------------------------------------------------------------------------
+---
 
-### 2. Install Dependencies
+### 2️⃣ Frontend Environment (Node.js)
 
-Ensure you are using the optimized versions for edge performance:
+Ensure you have **Node.js (v18+)** installed.
 
-``` bash
-pip install -r requirements.txt
+```bash
+cd frontend
+npm install
 ```
 
-------------------------------------------------------------------------
-
-### 3. Model Configuration
-
-Create a `models/` directory and place your ONNX model and weight file
-inside.
-
-> **Note:** ONNX Runtime requires the `.data` file to be in the same
-> folder as the `.onnx` file.
-
-``` text
-models/
-├── edgeface_xs_gamma_06.onnx
-└── edgeface_xs_gamma_06.onnx.data
-```
-
-------------------------------------------------------------------------
+---
 
 ## 💻 Usage Instructions
 
-### Step 1: Hardware Discovery
+### ✅ Step 1: Multi-Phase Enrollment
 
-Identify the correct camera index for your webcam (crucial for external
-USB devices):
+Enroll your identity by capturing your face from three distinct angles. Hold still while enrolling every profile. 
 
-``` bash
-python camera_rec.py
+```bash
+python backend/enroll_multi_profile.py
 ```
 
-Update the `CAMERA_INDEX` in `config.py` based on the script's output.
+---
 
-------------------------------------------------------------------------
+### ✅ Step 2: Running the Full-Stack Application
 
-### Step 2: Multi-Phase Enrollment
+To run the system with the Web Dashboard, start both the backend and frontend servers.
 
-Enroll your identity by capturing your face from three distinct angles.
-This prevents **centroid shift** and ensures accuracy regardless of head
-pose.
+#### Terminal 1 — Start Backend (FastAPI)
 
-``` bash
-python enroll_multi_profile.py
+```bash
+cd backend
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Enrollment Phases**
+#### Terminal 2 — Start Frontend (Vite)
 
--   **Phase 1 (Frontal):** Look directly at the camera.\
--   **Phase 2 (Left):** Turn your head slightly to the left.\
--   **Phase 3 (Right):** Turn your head slightly to the right.
-
-👉 Press **`s`** to start or advance each phase.
-
-------------------------------------------------------------------------
-
-### Step 3: Database Verification (Optional)
-
-Check the mathematical separation between enrolled users to ensure
-identities are distinct and the threshold is appropriate.
-
-``` bash
-python check_db.py
+```bash
+cd frontend
+npm run dev
 ```
 
-------------------------------------------------------------------------
+---
 
-### Step 4: Real-Time Benchmarking
+### ✅ Step 3: Access the Dashboard
 
-Launch the primary inference engine to test the recognition system:
+Open your browser and navigate to:
 
-``` bash
-python benchmark_multi_profile.py
 ```
+http://localhost:5173
+```
+
+You should see the **"Edge Face Recognition"** dashboard with a live AI-annotated video feed.
+
+---
+
+## 📊 Real-Time Benchmarking (CLI Mode)
+
+If you prefer to run the standalone benchmark script without the web interface:
+
+```bash
+python backend/benchmark_multi_profile.py
+```
+
+---
