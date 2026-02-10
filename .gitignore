@@ -30,3 +30,8 @@ frontend/coverage/
 .vscode/
 .idea/
 .DS_Store
+
+# --- Face Database (Privacy Protection) ---
+# Never commit biometric data!
+data/face_db/
+*.npy
