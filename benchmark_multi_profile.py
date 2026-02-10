@@ -45,7 +45,7 @@ sess_options.intra_op_num_threads = 2
 ort_session = ort.InferenceSession(ONNX_MODEL_PATH, sess_options, providers=['CPUExecutionProvider'])
 input_name = ort_session.get_inputs()[0].name
 
-base_options = python.BaseOptions(model_asset_path='blaze_face_short_range.tflite')
+base_options = python.BaseOptions(model_asset_path='models/blaze_face_short_range.tflite')
 options = vision.FaceDetectorOptions(base_options=base_options)
 detector = vision.FaceDetector.create_from_options(options)
 
