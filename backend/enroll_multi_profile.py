@@ -154,4 +154,4 @@ if len(all_embeddings) == SAMPLES_PER_PHASE * 3:
         np.save(save_path, centroid)
         print(f"✅ Saved Profile: {save_path}")
     
-    print("\nEnrollment Successful. Please update your benchmark script to check all profiles.")
+    print("\nEnrollment Successful.")
