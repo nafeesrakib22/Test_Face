@@ -9,7 +9,7 @@ from mediapipe.tasks.python import vision
 import config
 
 # --- CONFIGURATION ---
-ONNX_MODEL_PATH = "edgeface_xs_gamma_06.onnx"
+ONNX_MODEL_PATH = "models/edgeface_xs_gamma_06.onnx"
 DB_PATH = 'data/face_db'
 SAMPLES_PER_PHASE = 25
 BLUR_THRESHOLD = 100
@@ -22,7 +22,7 @@ sess_options = ort.SessionOptions()
 ort_session = ort.InferenceSession(ONNX_MODEL_PATH, sess_options, providers=['CPUExecutionProvider'])
 input_name = ort_session.get_inputs()[0].name
 
-base_options = python.BaseOptions(model_asset_path='blaze_face_short_range.tflite')
+base_options = python.BaseOptions(model_asset_path='models/blaze_face_short_range.tflite')
 options = vision.FaceDetectorOptions(base_options=base_options)
 detector = vision.FaceDetector.create_from_options(options)
 
