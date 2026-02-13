@@ -14,12 +14,18 @@ import config
 
 # --- CONFIGURATION ---
 ONNX_MODEL_PATH = 'models/edgeface_xs_gamma_06.onnx'
+DETECTOR_MODEL_PATH = 'models/blaze_face_short_range.tflite'
 DB_PATH = 'data/face_db'
 CSV_FILE = 'models/benchmark_multi_profile.csv'
+
 THRESHOLD = 0.65             
 STABILITY_FRAMES = 8          
 BUFFER_SIZE = 12              
 SMOOTHING_FACTOR = 0.20       
+
+# EXPERIMENTAL PARAMS (Synced with Enrollment)
+PADDING = 0.25  
+# ---------------------
 
 # --- CLASS: IDENTITY STABILIZER ---
 class IdentityStabilizer:
@@ -31,11 +37,8 @@ class IdentityStabilizer:
         self.history.append(name)
         counts = Counter(self.history)
         most_common, count = counts.most_common(1)[0]
-        
-        # Only switch if the new name appears in >70% of the buffer
         if count >= int(self.history.maxlen * 0.7):
             self.current_display_name = most_common
-            
         return self.current_display_name
 
 # 1. Initialize Engines
@@ -45,7 +48,7 @@ sess_options.intra_op_num_threads = 2
 ort_session = ort.InferenceSession(ONNX_MODEL_PATH, sess_options, providers=['CPUExecutionProvider'])
 input_name = ort_session.get_inputs()[0].name
 
-base_options = python.BaseOptions(model_asset_path='models/blaze_face_short_range.tflite')
+base_options = python.BaseOptions(model_asset_path=DETECTOR_MODEL_PATH)
 options = vision.FaceDetectorOptions(base_options=base_options)
 detector = vision.FaceDetector.create_from_options(options)
 
@@ -59,11 +62,16 @@ writer.writerow(["Timestamp", "Mode", "Raw_User", "Display_User", "Confidence", 
 
 # --- HELPER FUNCTIONS ---
 def get_embedding_onnx(img_bgr):
+    """Dynamic Elliptical Masking synced with experimental enrollment"""
     img_resized = cv2.resize(img_bgr, (112, 112))
     
-    # Elliptical Masking
+    # Create Dynamic Mask
     mask = np.zeros((112, 112), dtype=np.uint8)
-    cv2.ellipse(mask, (56, 56), (45, 58), 0, 0, 360, 255, -1)
+    axes = (int(112 * 0.42), int(112 * 0.52))
+    cv2.ellipse(mask, (56, 56), axes, 0, 0, 360, 255, -1)
+    
+    # Soften edges for better AI feature extraction
+    mask = cv2.GaussianBlur(mask, (7, 7), 0)
     img_masked = cv2.bitwise_and(img_resized, img_resized, mask=mask)
 
     cv2.imshow("What the AI Sees", img_masked) 
@@ -78,31 +86,25 @@ def get_embedding_onnx(img_bgr):
     return embeddings / np.linalg.norm(embeddings)
 
 def load_database(path):
-    """Loads vectors and groups them by identity name (split by '_')"""
     print(f"Loading Multi-Profile Database from {path}...")
-    db = {} # Structure: {"Name": [vector1, vector2, ...]}
+    db = {}
     if not os.path.exists(path): return db
     
     for filename in os.listdir(path):
         if filename.endswith('.npy'):
-            # Split filename to get actual identity (e.g., 'Nafees' from 'Nafees_frontal.npy')
             identity_name = filename.split('_')[0]
             vector = np.load(os.path.join(path, filename))
-            
             if identity_name not in db:
                 db[identity_name] = []
             db[identity_name].append(vector)
-            
-    for name in db:
-        print(f"✓ Loaded {len(db[name])} profiles for: {name}")
     return db
 
 # --- MAIN LOOP ---
 known_faces = load_database(DB_PATH)
 cap = cv2.VideoCapture(config.CAMERA_INDEX)
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+
 
 process = psutil.Process(os.getpid())
 stability_counter = 0
@@ -112,6 +114,7 @@ while cap.isOpened():
     success, frame = cap.read()
     if not success: break
     
+    h, w, _ = frame.shape
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     results = detector.detect(mp_image)
     
@@ -122,24 +125,29 @@ while cap.isOpened():
     msg, color = "Searching...", (255, 255, 255)
     
     if results.detections:
-        # --- MULTIPLE FACE DETECTION WARNING ---
         if len(results.detections) > 1:
             stability_counter = 0
             mode = "Warning"
-            msg, color = "⚠️ MULTIPLE FACES DETECTED", (0, 0, 255)
+            msg, color = "⚠️ MULTIPLE FACES", (0, 0, 255)
         else:
             stability_counter += 1
             mode = "Stabilizing"
             
-            # 1. Bounding Box Smoothing
+            # 1. Padded Bounding Box Logic (Center-Anchored)
             det = results.detections[0].bounding_box
             curr_box = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
+            
             if prev_box is None: prev_box = curr_box
             prev_box = (prev_box * (1.0 - SMOOTHING_FACTOR)) + (curr_box * SMOOTHING_FACTOR)
             
-            sx, sy, sw, sh = prev_box.astype(int)
-            x1, y1 = max(0, sx), max(0, sy)
-            x2, y2 = min(640, sx + sw), min(480, sy + sh)
+            sx, sy, sw, sh = prev_box
+            center_x, center_y = sx + (sw / 2), sy + (sh / 2)
+            padded_w, padded_h = sw * (1 + PADDING), sh * (1 + PADDING)
+
+            x1 = int(max(0, center_x - (padded_w / 2)))
+            y1 = int(max(0, center_y - (padded_h / 2)))
+            x2 = int(min(w, x1 + padded_w))
+            y2 = int(min(h, y1 + padded_h))
             
             if stability_counter < STABILITY_FRAMES:
                 msg, color = f"Stabilizing...", (0, 255, 255)
@@ -152,32 +160,27 @@ while cap.isOpened():
                     best_overall_score = -1.0
                     best_match_name = "Unknown"
                     
-                    # 2. MULTI-PROFILE RECOGNITION (Max-Pooling)
+                    # 2. Multi-Profile Max-Pooling
                     for name, profile_list in known_faces.items():
-                        # Compare current face to every profile (frontal, left, right)
                         for profile_vec in profile_list:
-                            score = np.dot(curr_emb, profile_vec.T).item()
+                            score = np.dot(curr_emb.flatten(), profile_vec.flatten()).item()
                             if score > best_overall_score:
                                 best_overall_score = score
                                 best_match_name = name
                     
                     confidence = best_overall_score
                     raw_user = best_match_name if best_overall_score > THRESHOLD else "Unknown"
-                    
-                    # Update Smooth Identity
                     display_user = stabilizer.update(raw_user)
                     
-                    if display_user != "Unknown":
-                        msg, color = f"{display_user} ({confidence:.2f})", (0, 255, 0)
-                    else:
-                        msg, color = f"Unknown ({confidence:.2f})", (0, 0, 255)
+                    color = (0, 255, 0) if display_user != "Unknown" else (0, 0, 255)
+                    msg = f"{display_user} ({confidence:.2f})"
             
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
     else:
         stability_counter = 0
         prev_box = None 
 
-    # Metrics
+    # Metrics Tracking
     memory_mb = process.memory_info().rss / (1024 * 1024)
     current_time = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
     writer.writerow([current_time, mode, raw_user, display_user, f"{confidence:.4f}", f"{memory_mb:.2f}"])

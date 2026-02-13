@@ -8,13 +8,18 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import config
 
-# --- CONFIGURATION ---
+
 ONNX_MODEL_PATH = "models/edgeface_xs_gamma_06.onnx"
+DETECTOR_MODEL_PATH = 'models/blaze_face_short_range.tflite'
 DB_PATH = 'data/face_db'
 SAMPLES_PER_PHASE = 25
 BLUR_THRESHOLD = 100
-MIN_FACE_SIZE = 100
 LIGHTING_RANGE = (60, 200)
+
+# EXPERIMENTAL PARAMS
+PADDING = 0.25           # Expands the box by 25%
+SMOOTHING_FACTOR = 0.20  
+
 
 # 1. Setup Engines
 print("Initializing Engines...")
@@ -22,7 +27,7 @@ sess_options = ort.SessionOptions()
 ort_session = ort.InferenceSession(ONNX_MODEL_PATH, sess_options, providers=['CPUExecutionProvider'])
 input_name = ort_session.get_inputs()[0].name
 
-base_options = python.BaseOptions(model_asset_path='models/blaze_face_short_range.tflite')
+base_options = python.BaseOptions(model_asset_path=DETECTOR_MODEL_PATH)
 options = vision.FaceDetectorOptions(base_options=base_options)
 detector = vision.FaceDetector.create_from_options(options)
 
@@ -36,15 +41,19 @@ def is_well_lit(image):
     return LIGHTING_RANGE[0] < np.mean(gray) < LIGHTING_RANGE[1]
 
 def get_embedding_onnx(img_bgr):
-    """Extracts embedding with Elliptical Masking for background independence"""
+    """Extracts embedding with Dynamic Elliptical Masking"""
     img_resized = cv2.resize(img_bgr, (112, 112))
     
-    # Apply Oval Mask
+    # Dynamic Mask Calculation
     mask = np.zeros((112, 112), dtype=np.uint8)
-    cv2.ellipse(mask, (56, 56), (45, 58), 0, 0, 360, 255, -1)
+    axes = (int(112 * 0.42), int(112 * 0.52))
+    cv2.ellipse(mask, (56, 56), axes, 0, 0, 360, 255, -1)
+    
+    # Soften edges
+    mask = cv2.GaussianBlur(mask, (7, 7), 0)
     img_masked = cv2.bitwise_and(img_resized, img_resized, mask=mask)
     
-    # Show what the AI sees for debugging
+    # Debug View
     cv2.imshow("AI Input Crop", img_masked)
 
     img_rgb = cv2.cvtColor(img_masked, cv2.COLOR_BGR2RGB)
@@ -63,11 +72,9 @@ name = input("\nEnter Name to Enroll: ").strip()
 if not name: exit()
 
 cap = cv2.VideoCapture(config.CAMERA_INDEX)
+# Set high-speed MJPG if supported
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-# Define the three distinct profiles to capture
 phases = [
     {"name": "FRONTAL", "target": SAMPLES_PER_PHASE},
     {"name": "LEFT_PROFILE", "target": SAMPLES_PER_PHASE * 2},
@@ -78,16 +85,21 @@ phase_idx = 0
 all_embeddings = []
 capturing = False
 prev_box = None
-SMOOTHING = 0.20
 
 print(f"\n--- Starting Multi-Profile Enrollment for {name} ---")
 print("Press 's' to START or CONTINUE a phase.")
 
+
+
 while phase_idx < len(phases):
     ret, frame = cap.read()
-    if not ret: break
+    if not ret:
+        break
     
+    h, w, _ = frame.shape
     current_phase = phases[phase_idx]
+    
+    # 1. Detection
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     results = detector.detect(mp_image)
     
@@ -95,32 +107,41 @@ while phase_idx < len(phases):
     color = (0, 255, 255) # Yellow (Waiting)
 
     if results.detections:
-        # Bounding Box Smoothing
+        # 2. Padded Bounding Box 
         det = results.detections[0].bounding_box
         curr_box = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
-        if prev_box is None: prev_box = curr_box
-        prev_box = (prev_box * (1 - SMOOTHING)) + (curr_box * SMOOTHING)
-        
-        x, y, w, h = prev_box.astype(int)
-        x1, y1, x2, y2 = max(0, x), max(0, y), min(640, x+w), min(480, y+h)
-        
-        face_crop = frame[y1:y2, x1:x2]
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
+        if prev_box is None: prev_box = curr_box
+        prev_box = (prev_box * (1.0 - SMOOTHING_FACTOR)) + (curr_box * SMOOTHING_FACTOR)
+        
+        sx, sy, sw, sh = prev_box
+        center_x, center_y = sx + (sw / 2), sy + (sh / 2)
+        padded_w, padded_h = sw * (1 + PADDING), sh * (1 + PADDING)
+
+        x1 = int(max(0, center_x - (padded_w / 2)))
+        y1 = int(max(0, center_y - (padded_h / 2)))
+        x2 = int(min(w, x1 + padded_w))
+        y2 = int(min(h, y1 + padded_h))
+
+        face_crop = frame[y1:y2, x1:x2]
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
+
+        # 3. Capture Logic
         if capturing:
-            color = (0, 255, 0) # Green (Capturing)
             if face_crop.size > 0 and is_sharp(face_crop) > BLUR_THRESHOLD and is_well_lit(face_crop):
                 all_embeddings.append(get_embedding_onnx(face_crop))
-                time.sleep(0.05) # Add variety in frames
+                color = (0, 255, 0) # Green (Good Capture)
+                time.sleep(0.05) 
                 
-                # Check if phase complete
                 if len(all_embeddings) >= current_phase['target']:
                     capturing = False
                     phase_idx += 1
                     print(f"✓ {current_phase['name']} complete.")
             else:
-                status_msg += " (Adjust lighting/position...)"
+                color = (0, 0, 255) # Red (Quality Issue)
+                status_msg += " (Hold Still / Check Lighting)"
 
+    # 4. UI 
     if not capturing:
         status_msg += " | Press 's' to START"
     else:
@@ -138,7 +159,7 @@ while phase_idx < len(phases):
 cap.release()
 cv2.destroyAllWindows()
 
-# 4. Save 3 Distinct Identities
+# 5. Save Centroids
 if len(all_embeddings) == SAMPLES_PER_PHASE * 3:
     print("\nProcessing Centroids...")
     profile_data = {
@@ -153,5 +174,4 @@ if len(all_embeddings) == SAMPLES_PER_PHASE * 3:
         save_path = os.path.join(DB_PATH, f"{name}_{p_name}.npy")
         np.save(save_path, centroid)
         print(f"✅ Saved Profile: {save_path}")
-    
     print("\nEnrollment Successful.")
