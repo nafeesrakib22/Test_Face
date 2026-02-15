@@ -18,14 +18,13 @@ DETECTOR_MODEL_PATH = 'models/blaze_face_short_range.tflite'
 DB_PATH = 'data/face_db'
 CSV_FILE = 'models/benchmark_multi_profile.csv'
 
-THRESHOLD = 0.65             
+THRESHOLD = 0.60          
 STABILITY_FRAMES = 8          
 BUFFER_SIZE = 12              
 SMOOTHING_FACTOR = 0.20       
 
 # EXPERIMENTAL PARAMS (Synced with Enrollment)
 PADDING = 0.25  
-# ---------------------
 
 # --- CLASS: IDENTITY STABILIZER ---
 class IdentityStabilizer:
@@ -60,7 +59,7 @@ f = open(CSV_FILE, 'w', newline='')
 writer = csv.writer(f)
 writer.writerow(["Timestamp", "Mode", "Raw_User", "Display_User", "Confidence", "RAM_MB"])
 
-# --- HELPER FUNCTIONS ---
+# HELPER FUNCTIONS 
 def get_embedding_onnx(img_bgr):
     """Dynamic Elliptical Masking synced with experimental enrollment"""
     img_resized = cv2.resize(img_bgr, (112, 112))
