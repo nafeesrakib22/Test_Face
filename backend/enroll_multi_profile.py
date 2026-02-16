@@ -21,7 +21,7 @@ PADDING = 0.25
 SMOOTHING_FACTOR = 0.20
 
 # 1. Setup Engines
-print("Initializing Automated Enrollment Engine...")
+print("Initializing Automated Interactive Enrollment Engine...")
 sess_options = ort.SessionOptions()
 ort_session = ort.InferenceSession(ONNX_MODEL_PATH, sess_options, providers=['CPUExecutionProvider'])
 input_name = ort_session.get_inputs()[0].name
@@ -42,35 +42,38 @@ def is_sharp(image):
     small = cv2.resize(image, (100, 100))
     return cv2.Laplacian(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
 
-def detect_pose(keypoints):
+def detect_pose(keypoints, target_pose):
     """
-    Optimized for Three-Quarter (3/4) View Enrollment.
-    Keypoint Indices: 0:L Eye, 1:R Eye, 2:Nose
+    Returns: (Current_Pose_Name, Instruction_Msg)
+    Uses the Nose-to-Eye horizontal ratio to provide real-time guidance.
     """
     l_eye, r_eye, nose = keypoints[0], keypoints[1], keypoints[2]
     eye_dist = abs(r_eye.x - l_eye.x)
+    if eye_dist < 0.02: return "UNKNOWN", "Angle too steep! Turn back."
     
-    # Safety: If head is turned so far that eyes overlap in 2D space
-    if eye_dist < 0.02: return "UNKNOWN"
-    
-    # Ratio of nose position relative to eyes (0.5 is perfectly centered)
     ratio = (nose.x - l_eye.x) / eye_dist
     
-    # 1. FRONTAL: Tightened to 0.42-0.58 to ensure the 'master' centroid is dead-center.
-    if 0.42 <= ratio <= 0.58: 
-        return "FRONTAL"
+    # FRONTAL LOGIC
+    if 0.42 <= ratio <= 0.58:
+        return "FRONTAL", "Perfect. Look straight."
     
-    # 2. LEFT PROFILE: Triggers in the 'sweet spot' (approx 15° to 60° turn).
-    # If ratio drops below 0.15, you are turning too far into a 90° profile.
-    elif 0.15 <= ratio < 0.42: 
-        return "LEFT_PROFILE"
+    # LEFT PROFILE LOGIC
+    elif 0.15 <= ratio < 0.42:
+        if target_pose == "LEFT_PROFILE":
+            if ratio > 0.30: return "LEFT_PROFILE", "Good, turn MORE left..."
+            if ratio < 0.22: return "LEFT_PROFILE", "Stop! Hold this angle."
+            return "LEFT_PROFILE", "Great, keep turning slowly."
+        return "LEFT_PROFILE", "Target is different. Turn back."
+            
+    # RIGHT PROFILE LOGIC
+    elif 0.58 < ratio <= 0.85:
+        if target_pose == "RIGHT_PROFILE":
+            if ratio < 0.70: return "RIGHT_PROFILE", "Good, turn MORE right..."
+            if ratio > 0.78: return "RIGHT_PROFILE", "Stop! Hold this angle."
+            return "RIGHT_PROFILE", "Great, keep turning slowly."
+        return "RIGHT_PROFILE", "Target is different. Turn back."
     
-    # 3. RIGHT PROFILE: Triggers in the 'sweet spot' (approx 15° to 60° turn).
-    # If ratio goes above 0.85, you are turning too far.
-    elif 0.58 < ratio <= 0.85: 
-        return "RIGHT_PROFILE"
-    
-    return "TRANSITIONING"
+    return "TRANSITIONING", "Turn slowly towards target..."
 
 def get_embedding_onnx(img_bgr):
     img_resized = cv2.resize(img_bgr, (112, 112))
@@ -97,7 +100,7 @@ phase_idx = 0
 all_embeddings = []
 prev_box = None
 
-print(f"\n--- AI Automated Enrollment for {name} ---")
+print(f"\n--- AI Automated Interactive Enrollment for {name} ---")
 
 
 
@@ -110,14 +113,14 @@ while phase_idx < len(phases):
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     results = detector.detect(mp_image)
     
-    msg, color = f"Target: {target_pose}", (0, 255, 255)
+    msg, color = f"Searching...", (255, 255, 255)
 
     if results.detections:
-        # A. Bounding Box & Pose Detection
         det = results.detections[0].bounding_box
         keypoints = results.detections[0].keypoints
-        current_pose = detect_pose(keypoints)
+        current_pose, instruction = detect_pose(keypoints, target_pose)
         
+        # Bounding Box Logic
         curr_box = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
         if prev_box is None: prev_box = curr_box
         prev_box = (prev_box * (1.0 - SMOOTHING_FACTOR)) + (curr_box * SMOOTHING_FACTOR)
@@ -131,24 +134,25 @@ while phase_idx < len(phases):
         face_crop = frame[y1:y2, x1:x2]
         cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
 
-        # B. Automated Capture Logic
+        # Automated Capture Logic with Interactive Guidance
         if current_pose == target_pose:
             if is_well_lit(face_crop) and is_sharp(face_crop) > BLUR_THRESHOLD:
                 all_embeddings.append(get_embedding_onnx(face_crop))
-                color = (0, 255, 0)
-                msg = f"CAPTURING {target_pose}..."
+                color = (0, 255, 0) # Green
+                msg = instruction
                 
                 if len(all_embeddings) >= (phase_idx + 1) * SAMPLES_PER_PHASE:
                     phase_idx += 1
                     print(f"✓ {target_pose} complete.")
             else:
-                color = (0, 0, 255)
+                color = (0, 0, 255) # Red
                 msg = "QUALITY LOW: Check Light/Hold Still"
         else:
-            msg = f"PLEASE TURN TO: {target_pose}"
+            color = (0, 255, 255) # Yellow
+            msg = f"{target_pose} -> {instruction}"
 
     cv2.putText(frame, msg, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-    cv2.putText(frame, f"Total Progress: {len(all_embeddings)}/75", (20, 70), 0, 0.6, (255,255,255), 1)
+    cv2.putText(frame, f"Progress: {len(all_embeddings)}/75", (20, 70), 0, 0.6, (255,255,255), 1)
     cv2.imshow("Automated Enrollment", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'): break
 
