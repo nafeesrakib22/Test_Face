@@ -44,19 +44,32 @@ def is_sharp(image):
 
 def detect_pose(keypoints):
     """
-    Keypoint Indices: 0:L Eye, 1:R Eye, 2:Nose, 3:Mouth, 4:L Ear, 5:R Ear
-    Uses the Nose-to-Eye horizontal ratio to determine head yaw.
+    Optimized for Three-Quarter (3/4) View Enrollment.
+    Keypoint Indices: 0:L Eye, 1:R Eye, 2:Nose
     """
     l_eye, r_eye, nose = keypoints[0], keypoints[1], keypoints[2]
     eye_dist = abs(r_eye.x - l_eye.x)
-    if eye_dist == 0: return "UNKNOWN"
     
-    # Ratio of nose position between eyes (0.5 is centered)
+    # Safety: If head is turned so far that eyes overlap in 2D space
+    if eye_dist < 0.02: return "UNKNOWN"
+    
+    # Ratio of nose position relative to eyes (0.5 is perfectly centered)
     ratio = (nose.x - l_eye.x) / eye_dist
     
-    if 0.38 <= ratio <= 0.62: return "FRONTAL"
-    elif ratio < 0.38: return "LEFT_PROFILE"
-    elif ratio > 0.62: return "RIGHT_PROFILE"
+    # 1. FRONTAL: Tightened to 0.42-0.58 to ensure the 'master' centroid is dead-center.
+    if 0.42 <= ratio <= 0.58: 
+        return "FRONTAL"
+    
+    # 2. LEFT PROFILE: Triggers in the 'sweet spot' (approx 15° to 60° turn).
+    # If ratio drops below 0.15, you are turning too far into a 90° profile.
+    elif 0.15 <= ratio < 0.42: 
+        return "LEFT_PROFILE"
+    
+    # 3. RIGHT PROFILE: Triggers in the 'sweet spot' (approx 15° to 60° turn).
+    # If ratio goes above 0.85, you are turning too far.
+    elif 0.58 < ratio <= 0.85: 
+        return "RIGHT_PROFILE"
+    
     return "TRANSITIONING"
 
 def get_embedding_onnx(img_bgr):
