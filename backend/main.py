@@ -4,6 +4,8 @@ import mediapipe as mp
 import onnxruntime as ort
 import os
 import time
+import atexit
+import threading
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -12,19 +14,17 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 # --- CONFIGURATION ---
-CAMERA_INDEX = 1  # 0 is default, 3 was your previous setup
+CAMERA_INDEX = 0 
 ONNX_MODEL_PATH = 'models/edgeface_xs_gamma_06.onnx'
 DETECTOR_MODEL_PATH = 'models/blaze_face_short_range.tflite'
 DB_PATH = 'data/face_db'
 
-# Recognition & Stability Logic
 THRESHOLD = 0.65             
 STABILITY_FRAMES = 8          
 BUFFER_SIZE = 12              
 SMOOTHING_FACTOR = 0.20       
 PADDING = 0.25  
 
-# Enrollment Quality Gates
 BLUR_THRESHOLD = 80
 LIGHTING_RANGE = (70, 210)
 SAMPLES_PER_PHASE = 25
@@ -33,19 +33,44 @@ SAMPLES_PER_PHASE = 25
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# --- GLOBAL STATE ---
+# --- THREADED CAMERA CLASS ---
+class VideoStream:
+    def __init__(self, src=0):
+        self.cap = cv2.VideoCapture(src)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self.ret, self.frame = self.cap.read()
+        self.stopped = False
+        self.lock = threading.Lock()
+
+    def start(self):
+        threading.Thread(target=self.update, args=(), daemon=True).start()
+        return self
+
+    def update(self):
+        while not self.stopped:
+            ret, frame = self.cap.read()
+            if not ret:
+                continue
+            with self.lock:
+                self.ret, self.frame = ret, frame
+
+    def read(self):
+        with self.lock:
+            return self.ret, self.frame.copy() if self.frame is not None else None
+
+    def stop(self):
+        self.stopped = True
+        self.cap.release()
+
+# Global State
+vs = VideoStream(CAMERA_INDEX).start()
 known_faces = {}
 ort_session = None
 detector = None
 enrollment_status = {"name": None, "progress": 0, "complete": False}
-prev_box = None
-stability_counter = 0
-
-# SINGLE GLOBAL CAMERA OBJECT (Solves the Black Screen Lock)
-cap = cv2.VideoCapture(CAMERA_INDEX)
-cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+stabilizer = None # Initialized in load_resources
 
 class IdentityStabilizer:
     def __init__(self, maxlen=12):
@@ -60,43 +85,33 @@ class IdentityStabilizer:
             self.current_display_name = most_common
         return self.current_display_name
 
-stabilizer = IdentityStabilizer(maxlen=BUFFER_SIZE)
-
 def load_resources():
-    global ort_session, known_faces, detector
-    print("⏳ Initializing AI Models...")
-    
-    # 1. EdgeFace ONNX
+    global ort_session, known_faces, detector, stabilizer
     sess_options = ort.SessionOptions()
     sess_options.intra_op_num_threads = 2
     ort_session = ort.InferenceSession(ONNX_MODEL_PATH, sess_options, providers=['CPUExecutionProvider'])
     
-    # 2. Database loading
     known_faces = {}
     if os.path.exists(DB_PATH):
         for filename in os.listdir(DB_PATH):
             if filename.endswith('.npy'):
-                identity_name = filename.split('_')[0]
-                vector = np.load(os.path.join(DB_PATH, filename))
-                if identity_name not in known_faces:
-                    known_faces[identity_name] = []
-                known_faces[identity_name].append(vector)
+                name = filename.split('_')[0]
+                vec = np.load(os.path.join(DB_PATH, filename))
+                if name not in known_faces: known_faces[name] = []
+                known_faces[name].append(vec)
     
-    # 3. MediaPipe Detector
     base_options = python.BaseOptions(model_asset_path=DETECTOR_MODEL_PATH)
     options = vision.FaceDetectorOptions(base_options=base_options)
     detector = vision.FaceDetector.create_from_options(options)
-    print("✅ System Ready.")
+    stabilizer = IdentityStabilizer(maxlen=BUFFER_SIZE)
 
 load_resources()
 
-# --- HELPER LOGIC ---
-
+# --- HELPERS ---
 def is_well_lit(image):
     if image.size == 0: return False
     small = cv2.resize(image, (32, 32))
-    avg_luma = np.mean(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY))
-    return LIGHTING_RANGE[0] < avg_luma < LIGHTING_RANGE[1]
+    return LIGHTING_RANGE[0] < np.mean(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)) < LIGHTING_RANGE[1]
 
 def is_sharp(image):
     if image.size == 0: return 0
@@ -104,221 +119,153 @@ def is_sharp(image):
     return cv2.Laplacian(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
 
 def get_embedding_onnx(img_bgr):
-    img_resized = cv2.resize(img_bgr, (112, 112))
+    img = cv2.resize(img_bgr, (112, 112))
     mask = np.zeros((112, 112), dtype=np.uint8)
-    cv2.ellipse(mask, (56, 56), (int(112*0.42), int(112*0.52)), 0, 0, 360, 255, -1)
+    cv2.ellipse(mask, (56, 56), (47, 58), 0, 0, 360, 255, -1)
     mask = cv2.GaussianBlur(mask, (7, 7), 0)
-    img_masked = cv2.bitwise_and(img_resized, img_resized, mask=mask)
-    img_float = cv2.cvtColor(img_masked, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    img_norm = (img_float - 0.5) / 0.5
-    img_input = np.transpose(img_norm, (2, 0, 1))[np.newaxis, :].astype(np.float32)
-    embeddings = ort_session.run(None, {ort_session.get_inputs()[0].name: img_input})[0]
-    return embeddings / np.linalg.norm(embeddings)
-
-
-
-def detect_pose(keypoints, target_pose):
-    p_left_eye, p_right_eye, nose, mouth = keypoints[0], keypoints[1], keypoints[2], keypoints[3]
+    img = cv2.bitwise_and(img, img, mask=mask)
     
-    # Mirror mapping
-    s_left_eye = p_left_eye if p_left_eye.x < p_right_eye.x else p_right_eye
-    s_right_eye = p_right_eye if p_left_eye.x < p_right_eye.x else p_left_eye
-
-    # Horizontal (Yaw)
-    eye_dist = abs(s_right_eye.x - s_left_eye.x)
-    yaw_ratio = (nose.x - s_left_eye.x) / eye_dist if eye_dist > 0.01 else 0.5
+    # Standard EdgeFace preprocessing: BGR to RGB, [0,1], then Normalize
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    img = (img - 0.5) / 0.5
+    img = np.transpose(img, (2, 0, 1))[np.newaxis, :]
     
-    # Vertical (Pitch)
-    eye_y_avg = (s_left_eye.y + s_right_eye.y) / 2
-    total_v_dist = abs(mouth.y - eye_y_avg)
-    pitch_ratio = abs(nose.y - eye_y_avg) / total_v_dist if total_v_dist > 0.01 else 0.5
+    emb = ort_session.run(None, {ort_session.get_inputs()[0].name: img})[0]
+    # CRITICAL: L2 Normalization
+    return emb / np.linalg.norm(emb)
 
-    if target_pose == "FRONTAL":
-        if 0.42 <= yaw_ratio <= 0.58 and 0.40 <= pitch_ratio <= 0.60:
-            return "FRONTAL", "Perfect. Look straight."
-        return "TRANSITIONING", "Look back to center."
+def detect_pose(keypoints, target):
+    l_eye, r_eye, nose, mouth = keypoints[0], keypoints[1], keypoints[2], keypoints[3]
+    sl_eye = l_eye if l_eye.x < r_eye.x else r_eye
+    sr_eye = r_eye if l_eye.x < r_eye.x else l_eye
+    yaw = (nose.x - sl_eye.x) / abs(sr_eye.x - sl_eye.x) if abs(sr_eye.x - sl_eye.x) > 0.01 else 0.5
+    pitch = abs(nose.y - (sl_eye.y + sr_eye.y)/2) / abs(mouth.y - (sl_eye.y + sr_eye.y)/2) if abs(mouth.y - (sl_eye.y + sr_eye.y)/2) > 0.01 else 0.5
 
-    elif target_pose == "LEFT_PROFILE":
-        if yaw_ratio > 0.58:
-            if yaw_ratio > 0.82: return "OVER", "TOO FAR! Turn back right."
-            if yaw_ratio > 0.70: return "LEFT_PROFILE", "STOP! Hold this angle."
-            return "LEFT_PROFILE", "Good, slowly turn more LEFT..."
-        return "TRANSITIONING", "Turn slowly to your LEFT..."
+    if target == "FRONTAL":
+        return ("FRONTAL", "Perfect. Look straight.") if 0.42 <= yaw <= 0.58 and 0.40 <= pitch <= 0.60 else ("TRANS", "Look back to center.")
+    elif target == "LEFT_PROFILE":
+        if yaw > 0.82: return "OVER", "TOO FAR! Turn back right."
+        return ("LEFT_PROFILE", "Good, keep turning LEFT.") if yaw > 0.58 else ("TRANS", "Turn slowly left...")
+    elif target == "RIGHT_PROFILE":
+        if yaw < 0.18: return "OVER", "TOO FAR! Turn back left."
+        return ("RIGHT_PROFILE", "Good, keep turning RIGHT.") if yaw < 0.42 else ("TRANS", "Turn slowly right...")
+    elif target == "LOOK_UP":
+        if pitch < 0.20: return "OVER", "TOO FAR! Chin down."
+        return ("LOOK_UP", "Good, tilt chin UP.") if pitch < 0.40 else ("TRANS", "Tilt chin up...")
+    elif target == "LOOK_DOWN":
+        if pitch > 0.85: return "OVER", "TOO FAR! Chin up."
+        return ("LOOK_DOWN", "Good, tilt chin DOWN.") if pitch > 0.60 else ("TRANS", "Tilt chin down...")
+    return "UNK", "Adjusting..."
 
-    elif target_pose == "RIGHT_PROFILE":
-        if yaw_ratio < 0.42:
-            if yaw_ratio < 0.18: return "OVER", "TOO FAR! Turn back left."
-            if yaw_ratio < 0.30: return "RIGHT_PROFILE", "STOP! Hold this angle."
-            return "RIGHT_PROFILE", "Good, slowly turn more RIGHT..."
-        return "TRANSITIONING", "Turn slowly to your RIGHT..."
-
-    elif target_pose == "LOOK_UP":
-        if pitch_ratio < 0.40:
-            if pitch_ratio < 0.20: return "OVER", "TOO FAR! Tilt chin down."
-            if pitch_ratio < 0.30: return "LOOK_UP", "STOP! Hold this angle."
-            return "LOOK_UP", "Good, tilt chin MORE UP..."
-        return "TRANSITIONING", "Slowly tilt chin UP..."
-
-    elif target_pose == "LOOK_DOWN":
-        if pitch_ratio > 0.60:
-            if pitch_ratio > 0.85: return "OVER", "TOO FAR! Tilt chin up."
-            if pitch_ratio > 0.75: return "LOOK_DOWN", "STOP! Hold this angle."
-            return "LOOK_DOWN", "Good, tilt chin MORE DOWN..."
-        return "TRANSITIONING", "Slowly tilt chin DOWN..."
-
-    return "UNKNOWN", "Adjusting..."
-
-# --- STREAM GENERATORS ---
-
+# --- GENERATORS ---
 def generate_recognition_frames():
-    global prev_box, stability_counter
+    prev_box, stability = None, 0
     while True:
-        success, frame = cap.read()
-        if not success: 
-            time.sleep(0.1)
-            continue
-            
+        ret, frame = vs.read()
+        if not ret: continue
         h, w, _ = frame.shape
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        results = detector.detect(mp_image)
+        res = detector.detect(mp_image)
         msg, color = "Scanning...", (255, 255, 255)
         
-        if results.detections:
-            if len(results.detections) > 1:
-                stability_counter = 0
-                msg, color = "⚠️ MULTIPLE FACES", (0, 0, 255)
+        if res.detections:
+            if len(res.detections) > 1: msg, color = "⚠️ MULTIPLE FACES", (0, 0, 255)
             else:
-                stability_counter += 1
-                det = results.detections[0].bounding_box
-                curr_box = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
-                if prev_box is None: prev_box = curr_box
-                prev_box = (prev_box * (1.0 - SMOOTHING_FACTOR)) + (curr_box * SMOOTHING_FACTOR)
-                
+                stability += 1
+                det = res.detections[0].bounding_box
+                curr = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
+                prev_box = curr if prev_box is None else (prev_box * 0.8) + (curr * 0.2)
                 sx, sy, sw, sh = prev_box
-                cx, cy = sx + (sw/2), sy + (sh/2)
-                pw, ph = sw*(1+PADDING), sh*(1+PADDING)
-                x1, y1, x2, y2 = int(max(0, cx-pw/2)), int(max(0, cy-ph/2)), int(min(w, cx+pw/2)), int(min(h, cy+ph/2))
+                cx, cy = sx + sw/2, sy + sh/2
+                x1, y1, x2, y2 = int(max(0, cx-sw*0.625)), int(max(0, cy-sh*0.625)), int(min(w, cx+sw*0.625)), int(min(h, cy+sh*0.625))
                 
-                if stability_counter < STABILITY_FRAMES:
-                    msg, color = "Stabilizing...", (0, 255, 255)
-                else:
-                    face_crop = frame[y1:y2, x1:x2]
-                    if face_crop.size > 0:
-                        curr_emb = get_embedding_onnx(face_crop)
-                        best_score, best_name = -1.0, "Unknown"
-                        for name, profiles in known_faces.items():
-                            for p_vec in profiles:
-                                score = np.dot(curr_emb.flatten(), p_vec.flatten()).item()
-                                if score > best_score:
-                                    best_score, best_name = score, name
-                        
-                        raw_user = best_name if best_score > THRESHOLD else "Unknown"
-                        display_user = stabilizer.update(raw_user)
-                        color = (0, 255, 0) if display_user != "Unknown" else (0, 0, 255)
-                        msg = f"{display_user} ({best_score:.2f})"
+                if stability >= STABILITY_FRAMES:
+                    crop = frame[y1:y2, x1:x2]
+                    if crop.size > 0:
+                        emb = get_embedding_onnx(crop)
+                        best_s, best_n = -1.0, "Unknown"
+                        for n, p_list in known_faces.items():
+                            for p in p_list:
+                                s = np.dot(emb.flatten(), p.flatten()).item()
+                                if s > best_s: best_s, best_n = s, n
+                        raw = best_n if best_s > THRESHOLD else "Unknown"
+                        display = stabilizer.update(raw)
+                        color = (0, 255, 0) if display != "Unknown" else (0, 0, 255)
+                        msg = f"{display} ({best_s:.2f})"
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        else:
-            stability_counter, prev_box = 0, None
+        else: stability, prev_box = 0, None
 
         cv2.putText(frame, msg, (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        ret, buffer = cv2.imencode('.jpg', frame)
-        yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
-def generate_enrollment_frames(name: str):
+def generate_enrollment_frames(name):
     global enrollment_status
     enrollment_status = {"name": name, "progress": 0, "complete": False}
-    
     phases = ["FRONTAL", "LEFT_PROFILE", "RIGHT_PROFILE", "LOOK_UP", "LOOK_DOWN"]
-    phase_idx, all_embeddings, prev_box_enroll = 0, [], None
+    p_idx, embs, prev_e = 0, [], None
 
-    while phase_idx < len(phases):
-        success, frame = cap.read()
-        if not success: 
-            time.sleep(0.1)
-            continue
-
-        h, w, _ = frame.shape
-        target_pose = phases[phase_idx]
+    while p_idx < len(phases):
+        ret, frame = vs.read()
+        if not ret: continue
+        h, w, target = frame.shape[0], frame.shape[1], phases[p_idx]
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        results = detector.detect(mp_image)
+        res = detector.detect(mp_image)
         msg, color = "Searching...", (255, 255, 255)
 
-        if results.detections:
-            det = results.detections[0].bounding_box
-            keypoints = results.detections[0].keypoints
-            cur_pose, instruction = detect_pose(keypoints, target_pose)
-            
-            curr_box = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
-            if prev_box_enroll is None: prev_box_enroll = curr_box
-            prev_box_enroll = (prev_box_enroll * (1.0 - SMOOTHING_FACTOR)) + (curr_box * SMOOTHING_FACTOR)
-            
-            sx, sy, sw, sh = prev_box_enroll
-            cx, cy = sx + (sw/2), sy + (sh/2)
-            pw, ph = sw*(1+PADDING), sh*(1+PADDING)
-            x1, y1, x2, y2 = int(max(0, cx-pw/2)), int(max(0, cy-ph/2)), int(min(w, cx+pw/2)), int(min(h, cy+ph/2))
-            
-            face_crop = frame[y1:y2, x1:x2]
+        if res.detections:
+            det, kps = res.detections[0].bounding_box, res.detections[0].keypoints
+            cur_p, instr = detect_pose(kps, target)
+            curr = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
+            prev_e = curr if prev_e is None else (prev_e * 0.8) + (curr * 0.2)
+            sx, sy, sw, sh = prev_e
+            cx, cy = sx + sw/2, sy + sh/2
+            x1, y1, x2, y2 = int(max(0, cx-sw*0.625)), int(max(0, cy-sh*0.625)), int(min(w, cx+sw*0.625)), int(min(h, cy+sh*0.625))
+            crop = frame[y1:y2, x1:x2]
             cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
 
-            if cur_pose == target_pose:
-                if is_well_lit(face_crop) and is_sharp(face_crop) > BLUR_THRESHOLD:
-                    all_embeddings.append(get_embedding_onnx(face_crop))
-                    color, msg = (0, 255, 0), instruction
-                    enrollment_status["progress"] = int((len(all_embeddings) / 125) * 100)
-                    
-                    if len(all_embeddings) >= (phase_idx + 1) * SAMPLES_PER_PHASE:
-                        phase_idx += 1
-                else:
-                    color, msg = (0, 0, 255), "QUALITY LOW: Hold Still"
-            else:
-                color = (0, 0, 255) if "TOO FAR" in instruction else (0, 255, 255)
-                msg = instruction
+            if cur_p == target:
+                if is_well_lit(crop) and is_sharp(crop) > BLUR_THRESHOLD:
+                    embs.append(get_embedding_onnx(crop))
+                    color, msg = (0, 255, 0), instr
+                    enrollment_status["progress"] = int((len(embs) / 125) * 100)
+                    if len(embs) >= (p_idx + 1) * 25: p_idx += 1
+                else: color, msg = (0, 0, 255), "QUALITY LOW: Hold Still"
+            else: color, msg = ((0, 0, 255) if "TOO FAR" in instr else (0, 255, 255)), instr
 
         cv2.putText(frame, msg, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        cv2.putText(frame, f"Phase {phase_idx+1}/5 | Total: {len(all_embeddings)}/125", (20, 70), 0, 0.6, (255,255,255), 1)
-        ret, buffer = cv2.imencode('.jpg', frame)
-        yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        cv2.putText(frame, f"Phase {p_idx+1}/5 | {enrollment_status['progress']}%", (20, 70), 0, 0.6, (255,255,255), 1)
+        _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
-    # Final Save
-    if len(all_embeddings) == 125:
+    if len(embs) == 125:
         p_names = ["frontal", "left", "right", "up", "down"]
         for i, p in enumerate(p_names):
-            chunk = all_embeddings[i*25 : (i+1)*25]
-            centroid = np.mean(np.array(chunk), axis=0)
-            np.save(os.path.join(DB_PATH, f"{name}_{p}.npy"), centroid / np.linalg.norm(centroid))
+            chunk = np.array(embs[i*25 : (i+1)*25])
+            # Average the 25 frames for this pose
+            centroid = np.mean(chunk, axis=0)
+            # CRITICAL: Re-normalize the centroid
+            normalized_centroid = centroid / np.linalg.norm(centroid)
+            
+            np.save(os.path.join(DB_PATH, f"{name}_{p}.npy"), normalized_centroid)
         
-        load_resources()
+        load_resources() # Reloads database into memory
         enrollment_status["complete"] = True
 
-# --- FASTAPI ENDPOINTS ---
-
-@app.get("/")
-def home():
-    return {"status": "5-Phase Engine Online", "identities": list(known_faces.keys())}
-
+# --- ENDPOINTS ---
 @app.get("/video_feed")
-def video_feed():
-    return StreamingResponse(generate_recognition_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+def video_feed(): return StreamingResponse(generate_recognition_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/enroll")
-def enroll_user(name: str = Query(..., min_length=1)):
-    return StreamingResponse(generate_enrollment_frames(name), media_type="multipart/x-mixed-replace; boundary=frame")
+def enroll_user(name: str): return StreamingResponse(generate_enrollment_frames(name), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/enroll_status")
-def get_enroll_status():
-    return enrollment_status
+def get_enroll_status(): return enrollment_status
 
 @app.get("/reset_session")
 def reset_session():
-    global enrollment_status, stability_counter, prev_box
-    enrollment_status = {"name": None, "progress": 0, "complete": False}
-    stability_counter = 0
-    prev_box = None
-    return {"status": "Session Reset"}
+    global enrollment_status; enrollment_status = {"name": None, "progress": 0, "complete": False}
+    return {"status": "Reset"}
 
-
-import atexit
 @atexit.register
-def shutdown():
-    if cap.isOpened():
-        cap.release()
+def shutdown(): vs.stop()
