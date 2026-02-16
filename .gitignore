@@ -32,6 +32,5 @@ frontend/coverage/
 .DS_Store
 
 # --- Face Database (Privacy Protection) ---
-# Never commit biometric data!
-data/face_db/
-*.npy
+backend/data/face_db/*.npy
+
