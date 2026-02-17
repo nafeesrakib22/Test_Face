@@ -7,7 +7,6 @@ npm-debug.log*
 # Python environment
 # Python environment
 __pycache__/
-venv/
 .env 
 face_edge_env/
 face_edge/        
