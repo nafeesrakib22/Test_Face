@@ -13,6 +13,8 @@ face_edge_env/
 face_edge/        
 face_edge_lib/
 checkpoints/
+backend/face_edge_env
+venv-face 
 
 # Ignore Large PyTorch/YOLO models from
 *.pt
