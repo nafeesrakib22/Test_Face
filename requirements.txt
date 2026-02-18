@@ -1,6 +1,7 @@
 # --- Web Server (Full-Stack) ---
 fastapi
-uvicorn
+uvicorn[standard]
+websockets
 python-multipart
 
 # --- Computer Vision & Detection ---

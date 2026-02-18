@@ -1,12 +1,5 @@
-import atexit
-from backend.services.camera_services import vs, load_resources
-
-def startup():
-    print("🚀 Initializing Hardware and AI Models...")
-    load_resources()
-    vs.start()
-
-@atexit.register
-def shutdown():
-    print("🛑 Releasing Hardware...")
-    vs.stop()
+# lifecycle.py
+# This module is retained for reference but is no longer used in main.py.
+# In the new WebSocket architecture the backend does not access a local camera;
+# the client browser captures video and streams frames over WebSocket.
+# AI model loading is handled directly in main.py via load_resources().

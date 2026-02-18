@@ -49,7 +49,8 @@ header {
   border: 1px solid var(--accent-green);
 }
 
-.status-badge.offline {
+.status-badge.offline,
+.status-badge.camera-denied {
   background-color: rgba(218, 54, 51, 0.15);
   color: var(--accent-red);
   border: 1px solid var(--accent-red);
@@ -62,27 +63,42 @@ header {
   animation: pulse 2s infinite;
 }
 
-/* Video Box & Progress bar */
+/* -----------------------------------------------------------------------
+   Video Box — contains the <video>, the overlay <canvas>, and the
+   progress bar all stacked via position: absolute / relative.
+----------------------------------------------------------------------- */
 .video-box {
   background-color: #000;
   border: 2px solid #30363d;
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 0 20px rgba(0,0,0,0.5);
-  aspect-ratio: 16/9;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+  aspect-ratio: 4 / 3;
   display: flex;
-  flex-direction: column; /* Stack video and progress bar */
   align-items: center;
   justify-content: center;
   position: relative;
 }
 
+/* The raw camera video fills the box */
 .live-feed {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  display: block;
 }
 
+/* The annotation canvas sits exactly on top of the video */
+.overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;   /* clicks pass through to the video element */
+}
+
+/* Progress bar pinned to the bottom of the video box */
 .progress-container {
   position: absolute;
   bottom: 0;
@@ -102,49 +118,6 @@ header {
 
 .placeholder {
   color: #8b949e;
-}
-
-/* Camera Selector */
-.camera-selector {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.camera-selector label {
-  font-size: 0.9rem;
-  color: #8b949e;
-  white-space: nowrap;
-}
-
-.camera-selector select {
-  background-color: var(--panel-bg);
-  color: var(--text-color);
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 0.875rem;
-  font-family: inherit;
-  cursor: pointer;
-  transition: border-color 0.2s;
-  min-width: 200px;
-}
-
-.camera-selector select:hover:not(:disabled) {
-  border-color: #58a6ff;
-}
-
-.camera-selector select:focus {
-  outline: none;
-  border-color: #58a6ff;
-  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
-}
-
-.camera-selector select:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* Controls & Buttons */
@@ -199,7 +172,7 @@ button:disabled {
 
 /* Animations */
 @keyframes pulse {
-  0% { opacity: 1; }
-  50% { opacity: 0.6; }
+  0%   { opacity: 1; }
+  50%  { opacity: 0.6; }
   100% { opacity: 1; }
 }
