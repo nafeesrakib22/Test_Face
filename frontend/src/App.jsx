@@ -9,51 +9,91 @@ const TARGET_FPS = 15
 
 // Status → colour mapping for the bounding-box overlay
 const STATUS_COLORS = {
-  identified:  '#2ea043',   // green
-  unknown:     '#da3633',   // red
-  stabilizing: '#f1c40f',   // yellow
-  scanning:    '#8b949e',   // grey
-  multiple:    '#da3633',   // red
+  identified:  '#2ea043',
+  unknown:     '#da3633',
+  stabilizing: '#f1c40f',
+  scanning:    '#8b949e',
+  multiple:    '#da3633',
   searching:   '#8b949e',
-  enrolling:   '#0576b9',   // blue
+  enrolling:   '#0576b9',
   complete:    '#2ea043',
 }
 
 export default function App() {
-  const [status, setStatus]           = useState('Offline')
-  const [isEnrolling, setIsEnrolling] = useState(false)
-  const [enrollName, setEnrollName]   = useState('')
-  const [progress, setProgress]       = useState(0)
-  const [overlay, setOverlay]         = useState(null)   // last parsed WS message
+  const [status, setStatus]             = useState('Offline')
+  const [isEnrolling, setIsEnrolling]   = useState(false)
+  const [enrollName, setEnrollName]     = useState('')
+  const [progress, setProgress]         = useState(0)
+  const [overlay, setOverlay]           = useState(null)
 
-  const videoRef      = useRef(null)   // <video> showing local camera
-  const canvasRef     = useRef(null)   // hidden canvas for frame capture
-  const overlayRef    = useRef(null)   // visible canvas for annotations
-  const wsRef         = useRef(null)   // active WebSocket
-  const intervalRef   = useRef(null)   // setInterval handle
-  const streamRef     = useRef(null)   // MediaStream from getUserMedia
+  // Camera selector state
+  const [cameras, setCameras]               = useState([])        // [{ deviceId, label }]
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null)
+  const [cameraLoading, setCameraLoading]   = useState(false)
+
+  const videoRef    = useRef(null)
+  const canvasRef   = useRef(null)   // hidden — frame capture
+  const overlayRef  = useRef(null)   // visible — annotations
+  const wsRef       = useRef(null)
+  const intervalRef = useRef(null)
+  const streamRef   = useRef(null)
 
   // -------------------------------------------------------------------------
-  // 1. Start local camera
+  // Camera enumeration
   // -------------------------------------------------------------------------
-  const startCamera = useCallback(async () => {
+  const enumerateCameras = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-        audio: false,
-      })
-      streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-      }
-    } catch (err) {
-      console.error('Camera access denied:', err)
-      setStatus('Camera Denied')
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const videoInputs = devices
+        .filter(d => d.kind === 'videoinput')
+        .map((d, i) => ({
+          deviceId: d.deviceId,
+          // Use the browser-provided label (only available after permission is
+          // granted). Fall back to a generic name.
+          label: d.label || `Camera ${i + 1}`,
+        }))
+      setCameras(videoInputs)
+      return videoInputs
+    } catch {
+      return []
     }
   }, [])
 
   // -------------------------------------------------------------------------
-  // 2. Stop everything cleanly
+  // 1. Start / switch camera
+  // -------------------------------------------------------------------------
+  const startCamera = useCallback(async (deviceId = null) => {
+    // Stop any existing stream tracks first
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+    }
+
+    const constraints = {
+      video: {
+        width:  { ideal: 640 },
+        height: { ideal: 480 },
+        ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' }),
+      },
+      audio: false,
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+      }
+      return stream
+    } catch (err) {
+      console.error('Camera access error:', err)
+      setStatus('Camera Denied')
+      return null
+    }
+  }, [])
+
+  // -------------------------------------------------------------------------
+  // 2. Stop WebSocket + frame loop (does NOT stop the camera)
   // -------------------------------------------------------------------------
   const stopAll = useCallback(() => {
     if (intervalRef.current) {
@@ -67,7 +107,7 @@ export default function App() {
   }, [])
 
   // -------------------------------------------------------------------------
-  // 3. Draw overlay annotations on the visible canvas
+  // 3. Draw overlay annotations
   // -------------------------------------------------------------------------
   const drawOverlay = useCallback((data) => {
     const canvas = overlayRef.current
@@ -78,55 +118,102 @@ export default function App() {
     canvas.width  = video.videoWidth  || 640
     canvas.height = video.videoHeight || 480
     ctx.clearRect(0, 0, canvas.width, canvas.height)
-
     if (!data) return
 
     const color = STATUS_COLORS[data.status] || '#8b949e'
 
+    // ------------------------------------------------------------------
+    // Helper: draw text inside a dark pill with a coloured left accent bar
+    // ------------------------------------------------------------------
+    const drawTextPill = (text, font, x, y, accentColor) => {
+      ctx.font = font
+      const metrics  = ctx.measureText(text)
+      const textW    = metrics.width
+      const padH     = 10   // horizontal padding
+      const padV     = 8    // vertical padding
+      const accentW  = 4    // left colour bar width
+      const radius   = 6
+
+      const boxW = textW + padH * 2 + accentW
+      const boxH = 20 + padV * 2        // approximate line height + padding
+      const bx   = x
+      const by   = y - boxH + padV
+
+      // Dark translucent background
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.60)'
+      ctx.beginPath()
+      ctx.roundRect(bx, by, boxW, boxH, radius)
+      ctx.fill()
+
+      // Colour accent bar on the left
+      ctx.fillStyle = accentColor
+      ctx.beginPath()
+      ctx.roundRect(bx, by, accentW, boxH, [radius, 0, 0, radius])
+      ctx.fill()
+
+      // White text
+      ctx.fillStyle = '#ffffff'
+      ctx.fillText(text, bx + accentW + padH, y)
+    }
+
+    // ------------------------------------------------------------------
     // Bounding box
+    // ------------------------------------------------------------------
     if (data.box) {
       const { x1, y1, x2, y2 } = data.box
-      // Scale normalised coords if the backend returned them relative to the
-      // original frame; since we send the full video resolution they are already
-      // in pixel space.
+
+      // Box outline
       ctx.strokeStyle = color
-      ctx.lineWidth   = 2
+      ctx.lineWidth   = 2.5
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
 
-      // Name + confidence label
+      // Name / status label above (or below if too close to top edge)
       const label = data.name
         ? `${data.name}${data.confidence ? ` (${(data.confidence * 100).toFixed(0)}%)` : ''}`
         : data.status?.toUpperCase() ?? ''
 
-      ctx.font         = 'bold 14px Segoe UI, sans-serif'
-      ctx.fillStyle    = color
-      const textW      = ctx.measureText(label).width
-      const px         = x1
-      const py         = y1 > 20 ? y1 - 6 : y2 + 18
-      ctx.fillRect(px - 2, py - 14, textW + 8, 18)
-      ctx.fillStyle = '#fff'
-      ctx.fillText(label, px + 2, py)
+      ctx.font = 'bold 14px Segoe UI, sans-serif'
+      const labelW = ctx.measureText(label).width
+      const lx = x1
+      const ly = y1 > 32 ? y1 - 6 : y2 + 28
+
+      ctx.fillStyle = color
+      ctx.fillRect(lx - 2, ly - 16, labelW + 10, 20)
+      ctx.fillStyle = '#ffffff'
+      ctx.fillText(label, lx + 3, ly)
     }
 
-    // Status message (top-left)
+    // ------------------------------------------------------------------
+    // Instruction / status message — top-left, large + pill background
+    // ------------------------------------------------------------------
     const statusMsg = buildStatusMsg(data)
     if (statusMsg) {
-      ctx.font      = 'bold 15px Segoe UI, sans-serif'
-      ctx.fillStyle = color
-      ctx.fillText(statusMsg, 10, 28)
+      drawTextPill(
+        statusMsg,
+        'bold 20px Segoe UI, sans-serif',
+        10,                // x
+        36,                // y (baseline)
+        color,
+      )
     }
 
-    // Enrollment: phase indicator (bottom-left)
+    // ------------------------------------------------------------------
+    // Phase indicator — bottom-left, medium + pill background
+    // ------------------------------------------------------------------
     if (data.phase !== undefined) {
-      const phaseMsg = `Phase ${data.phase}/5: ${data.phase_name ?? ''} | ${data.progress ?? 0}%`
-      ctx.font      = '13px Segoe UI, sans-serif'
-      ctx.fillStyle = '#e6edf3'
-      ctx.fillText(phaseMsg, 10, canvas.height - 12)
+      const phaseMsg = `Phase ${data.phase}/5: ${data.phase_name ?? ''}  |  ${data.progress ?? 0}%`
+      drawTextPill(
+        phaseMsg,
+        'bold 15px Segoe UI, sans-serif',
+        10,
+        canvas.height - 10,
+        color,
+      )
     }
   }, [])
 
   // -------------------------------------------------------------------------
-  // 4. Open a WebSocket and start sending frames
+  // 4. Open WebSocket and start sending frames
   // -------------------------------------------------------------------------
   const openWebSocket = useCallback((endpoint) => {
     stopAll()
@@ -136,7 +223,6 @@ export default function App() {
     wsRef.current = ws
 
     ws.onopen = () => {
-      // Send frames at TARGET_FPS
       intervalRef.current = setInterval(() => {
         if (ws.readyState !== WebSocket.OPEN) return
         const video  = videoRef.current
@@ -154,7 +240,7 @@ export default function App() {
             blob.arrayBuffer().then((buf) => ws.send(buf))
           },
           'image/jpeg',
-          0.7,   // JPEG quality
+          0.7,
         )
       }, Math.round(1000 / TARGET_FPS))
     }
@@ -164,9 +250,7 @@ export default function App() {
         const data = JSON.parse(event.data)
         setOverlay(data)
         drawOverlay(data)
-
         if (data.progress !== undefined) setProgress(data.progress)
-
         if (data.complete) {
           stopAll()
           setIsEnrolling(false)
@@ -175,7 +259,6 @@ export default function App() {
           setOverlay(null)
           drawOverlay(null)
           alert('✅ Enrollment Successful! 5 Profiles Loaded into Database.')
-          // Re-open recognition stream
           openRecognition()
         }
       } catch (e) {
@@ -199,30 +282,61 @@ export default function App() {
   }, [openWebSocket])
 
   // -------------------------------------------------------------------------
-  // 5. Mount: check backend, start camera, open recognition WS
+  // 5. Mount: health check → enumerate cameras → start camera → open WS
   // -------------------------------------------------------------------------
   useEffect(() => {
     fetch(`${BACKEND_URL}/`)
-      .then(() => {
+      .then(async () => {
         setStatus('Online')
-        startCamera().then(() => {
-          // Small delay so the video element has a chance to start
-          setTimeout(openRecognition, 800)
-        })
+
+        // Start with the default camera first so getUserMedia grants permission
+        // (labels are only available after permission is granted)
+        const stream = await startCamera(null)
+        if (!stream) return
+
+        // Now enumerate — labels will be populated since we have permission
+        const cams = await enumerateCameras()
+        if (cams.length > 0) {
+          // Figure out which deviceId the current stream is using
+          const activeTrack = stream.getVideoTracks()[0]
+          const activeId    = activeTrack?.getSettings()?.deviceId ?? cams[0].deviceId
+          setSelectedDeviceId(activeId)
+        }
+
+        setTimeout(openRecognition, 800)
       })
       .catch(() => setStatus('Offline'))
 
-    return () => stopAll()
+    // Listen for hot-plug / unplug events
+    const handleDeviceChange = () => enumerateCameras()
+    navigator.mediaDevices?.addEventListener('devicechange', handleDeviceChange)
+
+    return () => {
+      stopAll()
+      navigator.mediaDevices?.removeEventListener('devicechange', handleDeviceChange)
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Re-draw whenever overlay state changes (e.g. after enroll completes)
-  useEffect(() => {
-    drawOverlay(overlay)
-  }, [overlay, drawOverlay])
+  useEffect(() => { drawOverlay(overlay) }, [overlay, drawOverlay])
 
   // -------------------------------------------------------------------------
-  // 6. Enrollment controls
+  // 6. Camera switch handler
+  // -------------------------------------------------------------------------
+  const handleCameraChange = useCallback(async (e) => {
+    const newDeviceId = e.target.value
+    setSelectedDeviceId(newDeviceId)
+    setCameraLoading(true)
+
+    // Switch the physical camera; the WS frame loop keeps running and will
+    // automatically pick up frames from the new stream.
+    await startCamera(newDeviceId)
+
+    setCameraLoading(false)
+  }, [startCamera])
+
+  // -------------------------------------------------------------------------
+  // 7. Enrollment controls
   // -------------------------------------------------------------------------
   const startEnrollment = () => {
     const name = prompt('Enter Name for Enrollment:')
@@ -263,7 +377,6 @@ export default function App() {
         <div className="video-box">
           {status === 'Online' ? (
             <>
-              {/* Local camera feed */}
               <video
                 ref={videoRef}
                 autoPlay
@@ -271,14 +384,9 @@ export default function App() {
                 muted
                 className="live-feed"
               />
-
-              {/* Annotation overlay canvas (sits on top of the video) */}
               <canvas ref={overlayRef} className="overlay-canvas" />
-
-              {/* Hidden capture canvas (not rendered) */}
               <canvas ref={canvasRef} style={{ display: 'none' }} />
 
-              {/* Progress bar during enrollment */}
               {isEnrolling && (
                 <div className="progress-container">
                   <div className="progress-bar" style={{ width: `${progress}%` }} />
@@ -287,9 +395,10 @@ export default function App() {
             </>
           ) : (
             <div className="placeholder">
-              <p>🔌 {status === 'Camera Denied'
-                ? '🚫 Camera access was denied. Please allow camera permission and refresh.'
-                : 'Connecting to Python Backend…'}
+              <p>
+                {status === 'Camera Denied'
+                  ? '🚫 Camera access was denied. Please allow camera permission and refresh.'
+                  : '🔌 Connecting to Python Backend…'}
               </p>
               {status !== 'Camera Denied' && (
                 <small>Ensure 'main.py' is running on port 8000</small>
@@ -297,6 +406,26 @@ export default function App() {
             </div>
           )}
         </div>
+
+        {/* ── Camera Selector — always visible when Online ── */}
+        {status === 'Online' && cameras.length > 0 && (
+          <div className="camera-selector">
+            <label htmlFor="camera-select">📷 Camera:</label>
+            <select
+              id="camera-select"
+              value={selectedDeviceId ?? ''}
+              onChange={handleCameraChange}
+              disabled={isEnrolling || cameraLoading}
+            >
+              {cameras.map((cam) => (
+                <option key={cam.deviceId} value={cam.deviceId}>
+                  {cam.label}
+                </option>
+              ))}
+            </select>
+            {cameraLoading && <span className="camera-loading">Switching…</span>}
+          </div>
+        )}
 
         <div className="controls">
           {!isEnrolling ? (
@@ -329,7 +458,7 @@ function buildStatusMsg(data) {
     case 'scanning':    return 'Scanning...'
     case 'multiple':    return '⚠️ Multiple faces detected'
     case 'stabilizing': return 'Stabilizing...'
-    case 'identified':  return null   // name shown on bbox label
+    case 'identified':  return null
     case 'unknown':     return null
     case 'searching':   return data.instruction ?? 'Searching...'
     case 'enrolling':   return data.instruction ?? 'Enrolling...'
