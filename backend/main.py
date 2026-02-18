@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.routers import video, enrollment, session
+from backend.routers import video, enrollment, session, camera
 from backend import lifecycle
 
 # Initialize hardware and models
@@ -19,6 +19,7 @@ app.add_middleware(
 app.include_router(video.router)
 app.include_router(enrollment.router)
 app.include_router(session.router)
+app.include_router(camera.router)
 
 @app.get("/")
 def health_check():

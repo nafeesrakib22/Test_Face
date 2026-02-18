@@ -40,7 +40,7 @@ class VideoStream:
         self.cap.release()
 
 # Global Engine States
-vs = VideoStream(config.CAMERA_INDEX) # Started in lifecycle
+vs = VideoStream(config.CAMERA_INDEX)  # Started in lifecycle
 known_faces = {}
 ort_session = None
 detector = None
@@ -79,6 +79,15 @@ def load_resources():
     options = vision.FaceDetectorOptions(base_options=base_options)
     detector = vision.FaceDetector.create_from_options(options)
     stabilizer = IdentityStabilizer(maxlen=config.BUFFER_SIZE)
+
+def switch_camera(new_index: int):
+    """Stop the current VideoStream and start a new one on the given camera index."""
+    global vs
+    config.CAMERA_INDEX = new_index
+    vs.stop()
+    time.sleep(0.5)  # Allow OS to release the camera device
+    vs = VideoStream(new_index)
+    vs.start()
 
 # Helper Logic
 def is_well_lit(image):
