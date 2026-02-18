@@ -25,6 +25,8 @@ export default function App() {
   const [enrollName, setEnrollName]     = useState('')
   const [progress, setProgress]         = useState(0)
   const [overlay, setOverlay]           = useState(null)
+  const [uploadKbps, setUploadKbps]     = useState(null)   // null = not started yet
+  const [uploadFps, setUploadFps]       = useState(null)
 
   // Camera selector state
   const [cameras, setCameras]               = useState([])        // [{ deviceId, label }]
@@ -34,9 +36,12 @@ export default function App() {
   const videoRef    = useRef(null)
   const canvasRef   = useRef(null)   // hidden — frame capture
   const overlayRef  = useRef(null)   // visible — annotations
-  const wsRef       = useRef(null)
-  const intervalRef = useRef(null)
-  const streamRef   = useRef(null)
+  const wsRef          = useRef(null)
+  const intervalRef    = useRef(null)
+  const streamRef      = useRef(null)
+  const statsRef       = useRef(null)   // stats sampling interval
+  const bytesSentRef   = useRef(0)      // bytes accumulated this second
+  const framesSentRef  = useRef(0)      // frames accumulated this second
 
   // -------------------------------------------------------------------------
   // Camera enumeration
@@ -100,10 +105,18 @@ export default function App() {
       clearInterval(intervalRef.current)
       intervalRef.current = null
     }
+    if (statsRef.current) {
+      clearInterval(statsRef.current)
+      statsRef.current = null
+    }
+    bytesSentRef.current  = 0
+    framesSentRef.current = 0
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null
     }
+    setUploadKbps(null)
+    setUploadFps(null)
   }, [])
 
   // -------------------------------------------------------------------------
@@ -223,6 +236,19 @@ export default function App() {
     wsRef.current = ws
 
     ws.onopen = () => {
+      // Reset counters
+      bytesSentRef.current  = 0
+      framesSentRef.current = 0
+
+      // Stats interval — fires every second, computes KB/s + fps
+      statsRef.current = setInterval(() => {
+        setUploadKbps((bytesSentRef.current / 1024).toFixed(1))
+        setUploadFps(framesSentRef.current)
+        bytesSentRef.current  = 0
+        framesSentRef.current = 0
+      }, 1000)
+
+      // Frame-send interval
       intervalRef.current = setInterval(() => {
         if (ws.readyState !== WebSocket.OPEN) return
         const video  = videoRef.current
@@ -237,6 +263,8 @@ export default function App() {
         canvas.toBlob(
           (blob) => {
             if (!blob || ws.readyState !== WebSocket.OPEN) return
+            bytesSentRef.current  += blob.size
+            framesSentRef.current += 1
             blob.arrayBuffer().then((buf) => ws.send(buf))
           },
           'image/jpeg',
@@ -407,23 +435,35 @@ export default function App() {
           )}
         </div>
 
-        {/* ── Camera Selector — always visible when Online ── */}
-        {status === 'Online' && cameras.length > 0 && (
-          <div className="camera-selector">
-            <label htmlFor="camera-select">📷 Camera:</label>
-            <select
-              id="camera-select"
-              value={selectedDeviceId ?? ''}
-              onChange={handleCameraChange}
-              disabled={isEnrolling || cameraLoading}
-            >
-              {cameras.map((cam) => (
-                <option key={cam.deviceId} value={cam.deviceId}>
-                  {cam.label}
-                </option>
-              ))}
-            </select>
-            {cameraLoading && <span className="camera-loading">Switching…</span>}
+        {/* ── Camera Selector + Stats bar row ── */}
+        {status === 'Online' && (
+          <div className="sub-bar">
+            {cameras.length > 0 && (
+              <div className="camera-selector">
+                <label htmlFor="camera-select">📷 Camera:</label>
+                <select
+                  id="camera-select"
+                  value={selectedDeviceId ?? ''}
+                  onChange={handleCameraChange}
+                  disabled={isEnrolling || cameraLoading}
+                >
+                  {cameras.map((cam) => (
+                    <option key={cam.deviceId} value={cam.deviceId}>
+                      {cam.label}
+                    </option>
+                  ))}
+                </select>
+                {cameraLoading && <span className="camera-loading">Switching…</span>}
+              </div>
+            )}
+
+            {uploadKbps !== null && (
+              <div className="stats-bar">
+                <span className="stat-item">⬆ {uploadKbps} KB/s</span>
+                <span className="stat-divider">|</span>
+                <span className="stat-item">⚡ {uploadFps} fps</span>
+              </div>
+            )}
           </div>
         )}
 

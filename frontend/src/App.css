@@ -126,7 +126,6 @@ header {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  margin-top: 14px;
 }
 
 .camera-selector label {
@@ -167,6 +166,40 @@ header {
   font-size: 0.8rem;
   color: #8b949e;
   font-style: italic;
+}
+
+/* Sub-bar: camera selector + stats in one row */
+.sub-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* Live bandwidth / FPS counter */
+.stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: rgba(255, 255, 255, 0.04);
+  border: 1px solid #30363d;
+  border-radius: 20px;
+  padding: 5px 14px;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.8rem;
+  color: #8b949e;
+  white-space: nowrap;
+}
+
+.stat-item {
+  letter-spacing: 0.03em;
+}
+
+.stat-divider {
+  color: #30363d;
+  user-select: none;
 }
 
 /* Controls & Buttons */
