@@ -26,26 +26,62 @@ Test_Face/
 │   ├── src/                   # React Components & Logic
 │   ├── public/
 │   └── package.json           # Node.js dependencies
-└── face_edge_env/             # Python Virtual Environment
+├── Dockerfile.backend         # Backend container build
+├── Dockerfile.frontend        # Frontend container build (Nginx)
+├── docker-compose.yml         # Wires both services together
+├── nginx.conf                 # Nginx config (WS proxy + SPA routing)
+└── face_edge_env/             # Python Virtual Environment (dev only)
 ```
 
 ---
 
-## 🛠️ Setup & Installation
+## 🐳 Quick Start — Docker (Recommended)
+
+> For anyone who just wants to **run the application** without setting up a Python or Node.js environment.
+
+**Requirements:** [Docker](https://docs.docker.com/get-docker/) and [Git](https://git-scm.com/)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/<your-username>/<repo-name>.git
+cd <repo-name>
+
+# 2. Build the containers (first time only — takes a few minutes)
+docker compose build
+
+# 3. Start the app
+docker compose up -d
+```
+
+Then open **`http://localhost:3000`** in your browser.
+
+The face database is empty on first run — use **"Enroll New Face"** in the dashboard to register a face before recognition will work.
+
+```bash
+# To stop the app
+docker compose down
+```
+
+---
+
+## 🛠️ Developer Setup
+
+> For contributors who want to run the app locally and make code changes.
 
 ### 1️⃣ Backend Environment (Python)
 
+Requires **Python 3.12** and a virtual environment:
+
 ```bash
 cd ~/Documents/Test_Face
+python3 -m venv face_edge_env
 source face_edge_env/bin/activate
-pip install -r backend/requirements.txt
+pip install -r requirements.txt
 ```
-
----
 
 ### 2️⃣ Frontend Environment (Node.js)
 
-Ensure you have **Node.js (v18+)** installed.
+Requires **Node.js v18+**:
 
 ```bash
 cd frontend
@@ -54,47 +90,23 @@ npm install
 
 ---
 
-## 💻 Usage Instructions
+## 💻 Running Locally (Dev Mode)
 
-### ✅ Step 1: Multi-Phase Enrollment
-
-Enroll your identity by capturing your face from three distinct angles. Hold still while enrolling every profile. 
+#### Terminal 1 — Start Backend (from project root)
 
 ```bash
-python backend/enroll_multi_profile.py
+source face_edge_env/bin/activate
+uvicorn backend.main:app --reload
 ```
 
----
-
-### ✅ Step 2: Running the Full-Stack Application
-
-To run the system with the Web Dashboard, start both the backend and frontend servers.
-
-#### Terminal 1 — Start Backend (FastAPI)
-
-```bash
-cd backend
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-#### Terminal 2 — Start Frontend (Vite)
+#### Terminal 2 — Start Frontend
 
 ```bash
 cd frontend
 npm run dev
 ```
 
----
-
-### ✅ Step 3: Access the Dashboard
-
-Open your browser and navigate to:
-
-```
-http://localhost:5173
-```
-
-You should see the **"Edge Face Recognition"** dashboard with a live AI-annotated video feed.
+Then open **`http://localhost:5173`** in your browser.
 
 ---
 
