@@ -43,8 +43,8 @@ Test_Face/
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-username>/<repo-name>.git
-cd <repo-name>
+git clone https://github.com/nafeesrakib22/Test_Face.git
+cd Test_Face
 
 # 2. Build the containers (first time only — takes a few minutes)
 docker compose build
