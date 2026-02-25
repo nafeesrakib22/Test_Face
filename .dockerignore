@@ -1,0 +1,34 @@
+# Python
+face_edge_env/
+face_edge/
+face_edge_lib/
+venv-face/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.env
+
+# Face database (generated at runtime, persisted via volume)
+backend/data/face_db/
+
+# Frontend build artifacts (rebuilt inside Docker)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Benchmark / test data
+*.csv
+*.log
+
+# Large model files not used by the app
+*.pt
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+.~lock.*
+
+# Git
+.git/
+.gitignore

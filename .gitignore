@@ -35,3 +35,7 @@ frontend/coverage/
 # --- Face Database (Privacy Protection) ---
 backend/data/face_db/*.npy
 
+# --- Docker ---
+# Keep tracked: Dockerfile.backend, Dockerfile.frontend, docker-compose.yml, nginx.conf, .dockerignore
+# Ignore build cache artifacts
+.docker/

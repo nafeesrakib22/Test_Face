@@ -1,47 +1,48 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import './App.css'
 
-const BACKEND_WS  = 'ws://127.0.0.1:8000'
-const BACKEND_URL = 'http://127.0.0.1:8000'
+const PROTO = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+const BACKEND_WS = `${PROTO}//${window.location.host}`
+const BACKEND_URL = window.location.origin
 
 // How many frames per second we send to the backend
 const TARGET_FPS = 15
 
 // Status → colour mapping for the bounding-box overlay
 const STATUS_COLORS = {
-  identified:  '#2ea043',
-  unknown:     '#da3633',
+  identified: '#2ea043',
+  unknown: '#da3633',
   stabilizing: '#f1c40f',
-  scanning:    '#8b949e',
-  multiple:    '#da3633',
-  searching:   '#8b949e',
-  enrolling:   '#0576b9',
-  complete:    '#2ea043',
+  scanning: '#8b949e',
+  multiple: '#da3633',
+  searching: '#8b949e',
+  enrolling: '#0576b9',
+  complete: '#2ea043',
 }
 
 export default function App() {
-  const [status, setStatus]             = useState('Offline')
-  const [isEnrolling, setIsEnrolling]   = useState(false)
-  const [enrollName, setEnrollName]     = useState('')
-  const [progress, setProgress]         = useState(0)
-  const [overlay, setOverlay]           = useState(null)
-  const [uploadKbps, setUploadKbps]     = useState(null)   // null = not started yet
-  const [uploadFps, setUploadFps]       = useState(null)
+  const [status, setStatus] = useState('Offline')
+  const [isEnrolling, setIsEnrolling] = useState(false)
+  const [enrollName, setEnrollName] = useState('')
+  const [progress, setProgress] = useState(0)
+  const [overlay, setOverlay] = useState(null)
+  const [uploadKbps, setUploadKbps] = useState(null)   // null = not started yet
+  const [uploadFps, setUploadFps] = useState(null)
 
   // Camera selector state
-  const [cameras, setCameras]               = useState([])        // [{ deviceId, label }]
+  const [cameras, setCameras] = useState([])        // [{ deviceId, label }]
   const [selectedDeviceId, setSelectedDeviceId] = useState(null)
-  const [cameraLoading, setCameraLoading]   = useState(false)
+  const [cameraLoading, setCameraLoading] = useState(false)
 
-  const videoRef    = useRef(null)
-  const canvasRef   = useRef(null)   // hidden — frame capture
-  const overlayRef  = useRef(null)   // visible — annotations
-  const wsRef          = useRef(null)
-  const intervalRef    = useRef(null)
-  const streamRef      = useRef(null)
-  const statsRef       = useRef(null)   // stats sampling interval
-  const bytesSentRef   = useRef(0)      // bytes accumulated this second
-  const framesSentRef  = useRef(0)      // frames accumulated this second
+  const videoRef = useRef(null)
+  const canvasRef = useRef(null)   // hidden — frame capture
+  const overlayRef = useRef(null)   // visible — annotations
+  const wsRef = useRef(null)
+  const intervalRef = useRef(null)
+  const streamRef = useRef(null)
+  const statsRef = useRef(null)   // stats sampling interval
+  const bytesSentRef = useRef(0)      // bytes accumulated this second
+  const framesSentRef = useRef(0)      // frames accumulated this second
 
   // -------------------------------------------------------------------------
   // Camera enumeration
@@ -76,7 +77,7 @@ export default function App() {
 
     const constraints = {
       video: {
-        width:  { ideal: 640 },
+        width: { ideal: 640 },
         height: { ideal: 480 },
         ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' }),
       },
@@ -109,7 +110,7 @@ export default function App() {
       clearInterval(statsRef.current)
       statsRef.current = null
     }
-    bytesSentRef.current  = 0
+    bytesSentRef.current = 0
     framesSentRef.current = 0
     if (wsRef.current) {
       wsRef.current.close()
@@ -124,11 +125,11 @@ export default function App() {
   // -------------------------------------------------------------------------
   const drawOverlay = useCallback((data) => {
     const canvas = overlayRef.current
-    const video  = videoRef.current
+    const video = videoRef.current
     if (!canvas || !video) return
 
     const ctx = canvas.getContext('2d')
-    canvas.width  = video.videoWidth  || 640
+    canvas.width = video.videoWidth || 640
     canvas.height = video.videoHeight || 480
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     if (!data) return
@@ -140,17 +141,17 @@ export default function App() {
     // ------------------------------------------------------------------
     const drawTextPill = (text, font, x, y, accentColor) => {
       ctx.font = font
-      const metrics  = ctx.measureText(text)
-      const textW    = metrics.width
-      const padH     = 10   // horizontal padding
-      const padV     = 8    // vertical padding
-      const accentW  = 4    // left colour bar width
-      const radius   = 6
+      const metrics = ctx.measureText(text)
+      const textW = metrics.width
+      const padH = 10   // horizontal padding
+      const padV = 8    // vertical padding
+      const accentW = 4    // left colour bar width
+      const radius = 6
 
       const boxW = textW + padH * 2 + accentW
       const boxH = 20 + padV * 2        // approximate line height + padding
-      const bx   = x
-      const by   = y - boxH + padV
+      const bx = x
+      const by = y - boxH + padV
 
       // Dark translucent background
       ctx.fillStyle = 'rgba(0, 0, 0, 0.60)'
@@ -177,7 +178,7 @@ export default function App() {
 
       // Box outline
       ctx.strokeStyle = color
-      ctx.lineWidth   = 2.5
+      ctx.lineWidth = 2.5
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
 
       // Name / status label above (or below if too close to top edge)
@@ -237,25 +238,25 @@ export default function App() {
 
     ws.onopen = () => {
       // Reset counters
-      bytesSentRef.current  = 0
+      bytesSentRef.current = 0
       framesSentRef.current = 0
 
       // Stats interval — fires every second, computes KB/s + fps
       statsRef.current = setInterval(() => {
         setUploadKbps((bytesSentRef.current / 1024).toFixed(1))
         setUploadFps(framesSentRef.current)
-        bytesSentRef.current  = 0
+        bytesSentRef.current = 0
         framesSentRef.current = 0
       }, 1000)
 
       // Frame-send interval
       intervalRef.current = setInterval(() => {
         if (ws.readyState !== WebSocket.OPEN) return
-        const video  = videoRef.current
+        const video = videoRef.current
         const canvas = canvasRef.current
         if (!video || !canvas || video.readyState < 2) return
 
-        canvas.width  = video.videoWidth  || 640
+        canvas.width = video.videoWidth || 640
         canvas.height = video.videoHeight || 480
         const ctx = canvas.getContext('2d')
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
@@ -263,7 +264,7 @@ export default function App() {
         canvas.toBlob(
           (blob) => {
             if (!blob || ws.readyState !== WebSocket.OPEN) return
-            bytesSentRef.current  += blob.size
+            bytesSentRef.current += blob.size
             framesSentRef.current += 1
             blob.arrayBuffer().then((buf) => ws.send(buf))
           },
@@ -302,7 +303,7 @@ export default function App() {
         intervalRef.current = null
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawOverlay, stopAll])
 
   const openRecognition = useCallback(() => {
@@ -327,7 +328,7 @@ export default function App() {
         if (cams.length > 0) {
           // Figure out which deviceId the current stream is using
           const activeTrack = stream.getVideoTracks()[0]
-          const activeId    = activeTrack?.getSettings()?.deviceId ?? cams[0].deviceId
+          const activeId = activeTrack?.getSettings()?.deviceId ?? cams[0].deviceId
           setSelectedDeviceId(activeId)
         }
 
@@ -343,7 +344,7 @@ export default function App() {
       stopAll()
       navigator.mediaDevices?.removeEventListener('devicechange', handleDeviceChange)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => { drawOverlay(overlay) }, [overlay, drawOverlay])
@@ -378,7 +379,7 @@ export default function App() {
 
   const cancelEnrollment = () => {
     stopAll()
-    fetch(`${BACKEND_URL}/reset_session`).catch(() => {})
+    fetch(`${BACKEND_URL}/reset_session`).catch(() => { })
     setIsEnrolling(false)
     setEnrollName('')
     setProgress(0)
@@ -495,14 +496,14 @@ export default function App() {
 // ---------------------------------------------------------------------------
 function buildStatusMsg(data) {
   switch (data.status) {
-    case 'scanning':    return 'Scanning...'
-    case 'multiple':    return '⚠️ Multiple faces detected'
+    case 'scanning': return 'Scanning...'
+    case 'multiple': return '⚠️ Multiple faces detected'
     case 'stabilizing': return 'Stabilizing...'
-    case 'identified':  return null
-    case 'unknown':     return null
-    case 'searching':   return data.instruction ?? 'Searching...'
-    case 'enrolling':   return data.instruction ?? 'Enrolling...'
-    case 'complete':    return data.instruction ?? 'Complete!'
-    default:            return null
+    case 'identified': return null
+    case 'unknown': return null
+    case 'searching': return data.instruction ?? 'Searching...'
+    case 'enrolling': return data.instruction ?? 'Enrolling...'
+    case 'complete': return data.instruction ?? 'Complete!'
+    default: return null
   }
 }
