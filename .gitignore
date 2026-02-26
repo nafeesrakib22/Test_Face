@@ -7,12 +7,13 @@ npm-debug.log*
 # Python environment
 # Python environment
 __pycache__/
-venv/
 .env 
 face_edge_env/
 face_edge/        
 face_edge_lib/
 checkpoints/
+backend/face_edge_env
+venv-face 
 
 # Ignore Large PyTorch/YOLO models from
 *.pt
@@ -34,3 +35,7 @@ frontend/coverage/
 # --- Face Database (Privacy Protection) ---
 backend/data/face_db/*.npy
 
+# --- Docker ---
+# Keep tracked: Dockerfile.backend, Dockerfile.frontend, docker-compose.yml, nginx.conf, .dockerignore
+# Ignore build cache artifacts
+.docker/
