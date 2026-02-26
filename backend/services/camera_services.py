@@ -62,14 +62,22 @@ def _compute_ear(landmarks) -> float:
 
 
 class BlinkDetector:
-    """Detects a single deliberate blink from a stream of EAR values."""
-    def __init__(self):
-        self.consec_below = 0   # consecutive frames with EAR < threshold
+    """Detects a single deliberate blink from a stream of EAR values.
+
+    Uses a short rolling average to filter out single-frame EAR drops
+    caused by webcam focus changes or landmark jitter.
+    """
+    def __init__(self, ear_smooth_len: int = 3):
+        self.ear_history  = deque(maxlen=ear_smooth_len)
+        self.consec_below = 0   # consecutive smoothed frames with EAR < threshold
         self.blink_count  = 0
 
     def update(self, ear: float) -> bool:
         """Returns True the frame the blink completes (eye reopens)."""
-        if ear < config.EAR_THRESHOLD:
+        self.ear_history.append(ear)
+        smoothed = sum(self.ear_history) / len(self.ear_history)
+
+        if smoothed < config.EAR_THRESHOLD:
             self.consec_below += 1
         else:
             if self.consec_below >= config.BLINK_CONSEC_FRAMES:
@@ -79,7 +87,9 @@ class BlinkDetector:
             self.consec_below = 0
         return False
 
+
     def reset(self):
+        self.ear_history.clear()
         self.consec_below = 0
         self.blink_count  = 0
 
@@ -247,7 +257,7 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
     det  = res.detections[0].bounding_box
     curr = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
     prev = state.get("prev_box")
-    prev = curr if prev is None else (prev * 0.8) + (curr * 0.2)
+    prev = curr if prev is None else (prev * 0.9) + (curr * 0.1)
     state["prev_box"] = prev
 
     sx, sy, sw, sh = prev
@@ -258,18 +268,33 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
     y2 = int(min(h, cy + sh * 0.625))
     box = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
 
+    # Check blur on the face crop (used across all stages for the warning)
+    crop_check = frame[y1:y2, x1:x2]
+    blurry = bool(crop_check.size > 0 and is_sharp(crop_check) < config.FRAME_BLUR_THRESHOLD)
+
     if state["stability"] < config.STABILITY_FRAMES:
-        return {"status": "stabilizing", "name": None, "confidence": 0.0, "box": box}
+        return {"status": "stabilizing", "name": None, "confidence": 0.0, "box": box, "blurry": blurry}
 
     # ── Stage 2: Blink liveness challenge ────────────────────────────────────
     if not state["liveness_confirmed"]:
+        # Skip EAR processing on blurry frames — pause timeout, return warning
+        if blurry:
+            return {
+                "status": "blink_challenge",
+                "name": None, "confidence": 0.0, "box": box,
+                "blurry": True,
+                "instruction": "⚠️ Blurry frame — hold still",
+            }
+
         lm_result = landmarker.detect(mp_img)
 
         if lm_result.face_landmarks:
             landmarks = lm_result.face_landmarks[0]
             ear       = _compute_ear(landmarks)
             blinked   = state["blink_detector"].update(ear)
-            if blinked:
+            blinks_so_far = state["blink_detector"].blink_count
+
+            if blinks_so_far >= config.REQUIRED_BLINKS:
                 state["liveness_confirmed"] = True
                 state["liveness_timeout"]   = 0
                 # Fall through immediately to Stage 3 this frame
@@ -282,19 +307,25 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
                     return {
                         "status": "blink_challenge",
                         "name": None, "confidence": 0.0, "box": box,
+                        "blurry": False,
                         "instruction": "No blink detected. Please blink naturally.",
                     }
+                remaining = config.REQUIRED_BLINKS - blinks_so_far
+                eye_icons = "👁" * remaining
+                instr = f"Blink {remaining} more time{'s' if remaining > 1 else ''} {eye_icons}"
                 return {
                     "status": "blink_challenge",
                     "name": None, "confidence": 0.0, "box": box,
-                    "instruction": "Please blink to verify",
+                    "blurry": False,
+                    "instruction": instr,
                 }
         else:
             # Landmarker found no landmarks — keep waiting
             return {
                 "status": "blink_challenge",
                 "name": None, "confidence": 0.0, "box": box,
-                "instruction": "Please blink to verify",
+                "blurry": False,
+                "instruction": f"Blink {config.REQUIRED_BLINKS} times to verify",
             }
 
     # ── Stage 3: EdgeFace identity verification ───────────────────────────────
@@ -318,6 +349,7 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
         "name":       display,
         "confidence": round(float(best_s), 4),
         "box":        box,
+        "blurry":     blurry,
     }
 
 
@@ -333,7 +365,7 @@ _enrollment_state: dict = {
 }
 PHASES        = ["FRONTAL", "LEFT_PROFILE", "RIGHT_PROFILE", "LOOK_UP", "LOOK_DOWN"]
 PHASE_NAMES   = ["frontal", "left", "right", "up", "down"]
-SAMPLES_PER_PHASE = 25
+SAMPLES_PER_PHASE = 40
 TOTAL_SAMPLES = len(PHASES) * SAMPLES_PER_PHASE
 
 
@@ -385,7 +417,7 @@ def process_enrollment_frame(jpeg_bytes: bytes) -> dict:
 
     curr = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
     prev = state["prev_box"]
-    prev = curr if prev is None else (prev * 0.8) + (curr * 0.2)
+    prev = curr if prev is None else (prev * 0.9) + (curr * 0.1)
     state["prev_box"] = prev
 
     sx, sy, sw, sh = prev

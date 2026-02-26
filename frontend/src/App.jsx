@@ -6,7 +6,7 @@ const BACKEND_WS = `${PROTO}//${window.location.host}`
 const BACKEND_URL = window.location.origin
 
 // How many frames per second we send to the backend
-const TARGET_FPS = 15
+const TARGET_FPS = 30
 
 // Status → colour mapping for the bounding-box overlay
 const STATUS_COLORS = {
@@ -225,6 +225,22 @@ export default function App() {
         color,
       )
     }
+
+    // ------------------------------------------------------------------
+    // Blur warning — bottom-right corner
+    // ------------------------------------------------------------------
+    if (data.blurry) {
+      const blurMsg = '🔍 Blurry — hold still'
+      ctx.font = 'bold 15px Segoe UI, sans-serif'
+      const blurW = ctx.measureText(blurMsg).width
+      drawTextPill(
+        blurMsg,
+        'bold 15px Segoe UI, sans-serif',
+        canvas.width - blurW - 36,   // right-aligned with padding
+        canvas.height - 10,
+        '#e3b341',                    // amber
+      )
+    }
   }, [])
 
   // -------------------------------------------------------------------------
@@ -270,7 +286,7 @@ export default function App() {
             blob.arrayBuffer().then((buf) => ws.send(buf))
           },
           'image/jpeg',
-          0.7,
+          0.95,
         )
       }, Math.round(1000 / TARGET_FPS))
     }

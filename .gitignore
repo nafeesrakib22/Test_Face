@@ -33,7 +33,7 @@ frontend/coverage/
 .DS_Store
 
 # --- Face Database (Privacy Protection) ---
-backend/data/face_db/*.npy
+backend/data/face_db/
 
 # --- Docker ---
 # Keep tracked: Dockerfile.backend, Dockerfile.frontend, docker-compose.yml, nginx.conf, .dockerignore
