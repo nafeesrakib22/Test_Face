@@ -12,9 +12,13 @@ from backend import config
 known_faces = {}
 ort_session = None
 detector = None
+landmarker = None
 enrollment_status = {"name": None, "progress": 0, "complete": False}
 stabilizer = None
 
+# ---------------------------------------------------------------------------
+# Identity Stabilizer
+# ---------------------------------------------------------------------------
 class IdentityStabilizer:
     def __init__(self, maxlen=12):
         self.history = deque(maxlen=maxlen)
@@ -33,27 +37,89 @@ class IdentityStabilizer:
         self.current_display_name = "Unknown"
 
 
+# ---------------------------------------------------------------------------
+# Blink Detector (per-connection state)
+# ---------------------------------------------------------------------------
+# FaceMesh landmark indices for Eye Aspect Ratio
+# Right eye: [p1, p2, p3, p4, p5, p6]
+_RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+# Left eye:  [p1, p2, p3, p4, p5, p6]
+_LEFT_EYE  = [362, 385, 387, 263, 373, 380]
+
+
+def _dist(a, b):
+    return np.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
+
+
+def _compute_ear(landmarks) -> float:
+    """Compute average Eye Aspect Ratio for both eyes."""
+    def ear(indices):
+        p = [landmarks[i] for i in indices]
+        vertical   = _dist(p[1], p[5]) + _dist(p[2], p[4])
+        horizontal = _dist(p[0], p[3])
+        return vertical / (2.0 * horizontal) if horizontal > 1e-6 else 0.3
+    return (ear(_RIGHT_EYE) + ear(_LEFT_EYE)) / 2.0
+
+
+class BlinkDetector:
+    """Detects a single deliberate blink from a stream of EAR values."""
+    def __init__(self):
+        self.consec_below = 0   # consecutive frames with EAR < threshold
+        self.blink_count  = 0
+
+    def update(self, ear: float) -> bool:
+        """Returns True the frame the blink completes (eye reopens)."""
+        if ear < config.EAR_THRESHOLD:
+            self.consec_below += 1
+        else:
+            if self.consec_below >= config.BLINK_CONSEC_FRAMES:
+                self.blink_count += 1
+                self.consec_below = 0
+                return True
+            self.consec_below = 0
+        return False
+
+    def reset(self):
+        self.consec_below = 0
+        self.blink_count  = 0
+
+
+# ---------------------------------------------------------------------------
+# Startup: load all models + face DB
+# ---------------------------------------------------------------------------
 def load_resources():
-    global ort_session, known_faces, detector, stabilizer
+    global ort_session, known_faces, detector, landmarker, stabilizer
+
+    # ONNX face recognition model
     sess_options = ort.SessionOptions()
     sess_options.intra_op_num_threads = 2
     ort_session = ort.InferenceSession(
         config.ONNX_MODEL_PATH, sess_options, providers=['CPUExecutionProvider']
     )
 
+    # Face database (.npy centroids)
     known_faces.clear()
     if os.path.exists(config.DB_PATH):
         for filename in os.listdir(config.DB_PATH):
             if filename.endswith('.npy'):
                 name = filename.split('_')[0]
-                vec = np.load(os.path.join(config.DB_PATH, filename))
+                vec  = np.load(os.path.join(config.DB_PATH, filename))
                 if name not in known_faces:
                     known_faces[name] = []
                 known_faces[name].append(vec)
 
+    # BlazeFace detector
     base_options = python.BaseOptions(model_asset_path=config.DETECTOR_MODEL_PATH)
     options = vision.FaceDetectorOptions(base_options=base_options)
     detector = vision.FaceDetector.create_from_options(options)
+
+    # FaceMesh landmarker (for blink liveness)
+    lm_options = vision.FaceLandmarkerOptions(
+        base_options=python.BaseOptions(model_asset_path=config.LANDMARKER_MODEL_PATH),
+        num_faces=1,
+    )
+    landmarker = vision.FaceLandmarker.create_from_options(lm_options)
+
     stabilizer = IdentityStabilizer(maxlen=config.BUFFER_SIZE)
 
 
@@ -93,7 +159,7 @@ def detect_pose(keypoints, target):
     sl_eye = l_eye if l_eye.x < r_eye.x else r_eye
     sr_eye = r_eye if l_eye.x < r_eye.x else l_eye
     eye_dist = abs(sr_eye.x - sl_eye.x)
-    yaw = (nose.x - sl_eye.x) / eye_dist if eye_dist > 0.01 else 0.5
+    yaw   = (nose.x - sl_eye.x) / eye_dist if eye_dist > 0.01 else 0.5
     v_dist = abs(mouth.y - (sl_eye.y + sr_eye.y) / 2)
     pitch = abs(nose.y - (sl_eye.y + sr_eye.y) / 2) / v_dist if v_dist > 0.01 else 0.5
 
@@ -119,47 +185,66 @@ def detect_pose(keypoints, target):
 
 
 # ---------------------------------------------------------------------------
-# Frame Processing Functions (WebSocket-based, client sends JPEG bytes)
+# Frame Processing — Recognition (WebSocket per-connection)
 # ---------------------------------------------------------------------------
 
-# Per-connection state for recognition (stored externally or passed in)
 def _decode_frame(jpeg_bytes: bytes):
     """Decode raw JPEG bytes into a BGR numpy array."""
-    arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+    arr   = np.frombuffer(jpeg_bytes, dtype=np.uint8)
     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     return frame
 
 
+def make_recognition_state() -> dict:
+    """Return a fresh per-connection state dict for recognition."""
+    return {
+        "prev_box":          None,
+        "stability":         0,
+        "liveness_confirmed": False,
+        "blink_detector":    BlinkDetector(),
+        "liveness_timeout":  0,
+    }
+
+
 def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
     """
-    Receive JPEG bytes from the client, run face detection + recognition,
-    return a JSON-serialisable dict with detection results.
+    Three-stage pipeline per frame:
+      1. BlazeFace  — detect face, smooth box, count stability frames
+      2. FaceLandmarker — blink liveness challenge (until confirmed)
+      3. EdgeFace   — identity embedding + cosine matching
 
-    `state` is a mutable dict kept alive per WebSocket connection:
-        { "prev_box": None, "stability": 0 }
+    `state` is a mutable dict kept alive per WebSocket connection.
+    Initialise with make_recognition_state().
     """
     frame = _decode_frame(jpeg_bytes)
     if frame is None:
         return {"status": "error", "message": "Could not decode frame"}
 
-    h, w = frame.shape[:2]
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    res = detector.detect(mp_image)
+    h, w   = frame.shape[:2]
+    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
+                      data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+    # ── Stage 1: BlazeFace detection ─────────────────────────────────────────
+    res = detector.detect(mp_img)
 
     if not res.detections:
-        state["stability"] = 0
-        state["prev_box"] = None
+        # Face lost — full reset
+        state["stability"]          = 0
+        state["prev_box"]           = None
+        state["liveness_confirmed"] = False
+        state["liveness_timeout"]   = 0
+        state["blink_detector"].reset()
         stabilizer.reset()
         return {"status": "scanning", "name": None, "confidence": 0.0, "box": None}
 
     if len(res.detections) > 1:
         state["stability"] = 0
-        state["prev_box"] = None
+        state["prev_box"]  = None
         return {"status": "multiple", "name": None, "confidence": 0.0, "box": None}
 
-    # Single face detected
+    # Single face — smooth bounding box
     state["stability"] += 1
-    det = res.detections[0].bounding_box
+    det  = res.detections[0].bounding_box
     curr = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
     prev = state.get("prev_box")
     prev = curr if prev is None else (prev * 0.8) + (curr * 0.2)
@@ -176,6 +261,43 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
     if state["stability"] < config.STABILITY_FRAMES:
         return {"status": "stabilizing", "name": None, "confidence": 0.0, "box": box}
 
+    # ── Stage 2: Blink liveness challenge ────────────────────────────────────
+    if not state["liveness_confirmed"]:
+        lm_result = landmarker.detect(mp_img)
+
+        if lm_result.face_landmarks:
+            landmarks = lm_result.face_landmarks[0]
+            ear       = _compute_ear(landmarks)
+            blinked   = state["blink_detector"].update(ear)
+            if blinked:
+                state["liveness_confirmed"] = True
+                state["liveness_timeout"]   = 0
+                # Fall through immediately to Stage 3 this frame
+            else:
+                state["liveness_timeout"] += 1
+                if state["liveness_timeout"] >= config.LIVENESS_TIMEOUT:
+                    # Timeout — reset and ask again
+                    state["liveness_timeout"] = 0
+                    state["blink_detector"].reset()
+                    return {
+                        "status": "blink_challenge",
+                        "name": None, "confidence": 0.0, "box": box,
+                        "instruction": "No blink detected. Please blink naturally.",
+                    }
+                return {
+                    "status": "blink_challenge",
+                    "name": None, "confidence": 0.0, "box": box,
+                    "instruction": "Please blink to verify",
+                }
+        else:
+            # Landmarker found no landmarks — keep waiting
+            return {
+                "status": "blink_challenge",
+                "name": None, "confidence": 0.0, "box": box,
+                "instruction": "Please blink to verify",
+            }
+
+    # ── Stage 3: EdgeFace identity verification ───────────────────────────────
     crop = frame[y1:y2, x1:x2]
     if crop.size == 0:
         return {"status": "scanning", "name": None, "confidence": 0.0, "box": box}
@@ -188,46 +310,44 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
             if s > best_s:
                 best_s, best_n = s, n
 
-    raw = best_n if best_s > config.THRESHOLD else "Unknown"
+    raw     = best_n if best_s > config.THRESHOLD else "Unknown"
     display = stabilizer.update(raw)
 
     return {
-        "status": "identified" if display != "Unknown" else "unknown",
-        "name": display,
+        "status":     "identified" if display != "Unknown" else "unknown",
+        "name":       display,
         "confidence": round(float(best_s), 4),
-        "box": box,
+        "box":        box,
     }
 
 
-# Per-enrollment-session state
+# ---------------------------------------------------------------------------
+# Enrollment (unchanged)
+# ---------------------------------------------------------------------------
+
 _enrollment_state: dict = {
-    "name": None,
+    "name":      None,
     "phase_idx": 0,
     "embeddings": [],
-    "prev_box": None,
+    "prev_box":  None,
 }
-PHASES = ["FRONTAL", "LEFT_PROFILE", "RIGHT_PROFILE", "LOOK_UP", "LOOK_DOWN"]
-PHASE_NAMES = ["frontal", "left", "right", "up", "down"]
+PHASES        = ["FRONTAL", "LEFT_PROFILE", "RIGHT_PROFILE", "LOOK_UP", "LOOK_DOWN"]
+PHASE_NAMES   = ["frontal", "left", "right", "up", "down"]
 SAMPLES_PER_PHASE = 25
 TOTAL_SAMPLES = len(PHASES) * SAMPLES_PER_PHASE
 
 
 def reset_enrollment_state(name: str):
     _enrollment_state.update({
-        "name": name,
+        "name":      name,
         "phase_idx": 0,
         "embeddings": [],
-        "prev_box": None,
+        "prev_box":  None,
     })
     enrollment_status.update({"name": name, "progress": 0, "complete": False})
 
 
 def process_enrollment_frame(jpeg_bytes: bytes) -> dict:
-    """
-    Receive JPEG bytes during enrollment, guide the user through 5 poses,
-    accumulate embeddings, save centroids when done.
-    Returns a JSON-serialisable dict.
-    """
     frame = _decode_frame(jpeg_bytes)
     if frame is None:
         return {"status": "error", "message": "Could not decode frame"}
@@ -236,30 +356,31 @@ def process_enrollment_frame(jpeg_bytes: bytes) -> dict:
     if state["name"] is None:
         return {"status": "error", "message": "Enrollment not started"}
 
-    h, w = frame.shape[:2]
+    h, w  = frame.shape[:2]
     p_idx = state["phase_idx"]
 
     if p_idx >= len(PHASES):
         return {"status": "complete", "progress": 100, "phase": p_idx, "instruction": "Done!"}
 
     target = PHASES[p_idx]
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    res = detector.detect(mp_image)
+    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB,
+                      data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    res = detector.detect(mp_img)
 
     if not res.detections:
         return {
-            "status": "searching",
-            "phase": p_idx + 1,
-            "phase_name": target,
-            "progress": enrollment_status["progress"],
+            "status":      "searching",
+            "phase":       p_idx + 1,
+            "phase_name":  target,
+            "progress":    enrollment_status["progress"],
             "instruction": "Searching for face...",
-            "quality_ok": False,
-            "box": None,
-            "complete": False,
+            "quality_ok":  False,
+            "box":         None,
+            "complete":    False,
         }
 
-    det = res.detections[0].bounding_box
-    kps = res.detections[0].keypoints
+    det     = res.detections[0].bounding_box
+    kps     = res.detections[0].keypoints
     cur_pose, instr = detect_pose(kps, target)
 
     curr = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
@@ -282,7 +403,7 @@ def process_enrollment_frame(jpeg_bytes: bytes) -> dict:
             quality_ok = True
             state["embeddings"].append(get_embedding_onnx(crop))
             total_embs = len(state["embeddings"])
-            progress = int((total_embs / TOTAL_SAMPLES) * 100)
+            progress   = int((total_embs / TOTAL_SAMPLES) * 100)
             enrollment_status["progress"] = progress
 
             if total_embs >= (p_idx + 1) * SAMPLES_PER_PHASE:
@@ -291,38 +412,37 @@ def process_enrollment_frame(jpeg_bytes: bytes) -> dict:
 
     progress = enrollment_status["progress"]
 
-    # Check if all phases are done
     if state["phase_idx"] >= len(PHASES) and len(state["embeddings"]) == TOTAL_SAMPLES:
         _save_enrollment(state["name"], state["embeddings"])
         load_resources()
         enrollment_status["complete"] = True
         return {
-            "status": "complete",
-            "phase": len(PHASES),
-            "phase_name": "DONE",
-            "progress": 100,
+            "status":      "complete",
+            "phase":       len(PHASES),
+            "phase_name":  "DONE",
+            "progress":    100,
             "instruction": "Enrollment complete! All 5 profiles saved.",
-            "quality_ok": True,
-            "box": box,
-            "complete": True,
+            "quality_ok":  True,
+            "box":         box,
+            "complete":    True,
         }
 
     return {
-        "status": "enrolling",
-        "phase": min(p_idx + 1, len(PHASES)),
-        "phase_name": PHASES[min(p_idx, len(PHASES) - 1)],
-        "progress": progress,
+        "status":      "enrolling",
+        "phase":       min(p_idx + 1, len(PHASES)),
+        "phase_name":  PHASES[min(p_idx, len(PHASES) - 1)],
+        "progress":    progress,
         "instruction": instr,
-        "quality_ok": quality_ok,
-        "box": box,
-        "complete": False,
+        "quality_ok":  quality_ok,
+        "box":         box,
+        "complete":    False,
     }
 
 
 def _save_enrollment(name: str, embeddings: list):
     os.makedirs(config.DB_PATH, exist_ok=True)
     for i, p_name in enumerate(PHASE_NAMES):
-        chunk = np.array(embeddings[i * SAMPLES_PER_PHASE: (i + 1) * SAMPLES_PER_PHASE])
+        chunk    = np.array(embeddings[i * SAMPLES_PER_PHASE: (i + 1) * SAMPLES_PER_PHASE])
         centroid = np.mean(chunk, axis=0)
         centroid /= np.linalg.norm(centroid)
         np.save(os.path.join(config.DB_PATH, f"{name}_{p_name}.npy"), centroid)

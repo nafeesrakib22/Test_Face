@@ -1,7 +1,7 @@
 import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from backend.services.camera_services import process_recognition_frame
+from backend.services.camera_services import process_recognition_frame, make_recognition_state
 
 router = APIRouter()
 
@@ -17,8 +17,8 @@ async def ws_recognize(websocket: WebSocket):
     """
     await websocket.accept()
 
-    # Per-connection state (bounding-box smoothing + stability counter)
-    state = {"prev_box": None, "stability": 0}
+    # Per-connection state (box smoothing + stability + liveness)
+    state = make_recognition_state()
 
     try:
         while True:

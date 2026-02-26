@@ -18,6 +18,7 @@ const STATUS_COLORS = {
   searching: '#8b949e',
   enrolling: '#0576b9',
   complete: '#2ea043',
+  blink_challenge: '#a371f7',  // purple — liveness check
 }
 
 export default function App() {
@@ -499,6 +500,7 @@ function buildStatusMsg(data) {
     case 'scanning': return 'Scanning...'
     case 'multiple': return '⚠️ Multiple faces detected'
     case 'stabilizing': return 'Stabilizing...'
+    case 'blink_challenge': return data.instruction ?? '👁 Please blink to verify'
     case 'identified': return null
     case 'unknown': return null
     case 'searching': return data.instruction ?? 'Searching...'
