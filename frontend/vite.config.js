@@ -11,6 +11,7 @@ export default defineConfig({
       // REST endpoints
       '/enroll_status': { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/reset_session': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/users': { target: 'http://127.0.0.1:8000', changeOrigin: true },
 
     },
   },

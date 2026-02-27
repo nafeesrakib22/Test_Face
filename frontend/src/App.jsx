@@ -35,6 +35,11 @@ export default function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState(null)
   const [cameraLoading, setCameraLoading] = useState(false)
 
+  // Users dashboard state
+  const [users, setUsers] = useState([])
+  const [showUsers, setShowUsers] = useState(false)
+  const [usersLoading, setUsersLoading] = useState(false)
+
   const videoRef = useRef(null)
   const canvasRef = useRef(null)   // hidden — frame capture
   const overlayRef = useRef(null)   // visible — annotations
@@ -305,6 +310,7 @@ export default function App() {
           setOverlay(null)
           drawOverlay(null)
           alert('✅ Enrollment Successful! 5 Profiles Loaded into Database.')
+          fetchUsers()
           openRecognition()
         }
       } catch (e) {
@@ -350,6 +356,7 @@ export default function App() {
         }
 
         setTimeout(openRecognition, 800)
+        fetchUsers()
       })
       .catch(() => setStatus('Offline'))
 
@@ -404,6 +411,25 @@ export default function App() {
     drawOverlay(null)
     openRecognition()
   }
+
+  // -------------------------------------------------------------------------
+  // 8. Users dashboard
+  // -------------------------------------------------------------------------
+  const fetchUsers = useCallback(() => {
+    setUsersLoading(true)
+    fetch(`${BACKEND_URL}/users`)
+      .then(r => r.json())
+      .then(d => setUsers(d.users ?? []))
+      .catch(() => { })
+      .finally(() => setUsersLoading(false))
+  }, [])
+
+  const deleteUser = useCallback((name) => {
+    if (!window.confirm(`Delete "${name}" from the face database?`)) return
+    fetch(`${BACKEND_URL}/users/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      .then(() => fetchUsers())
+      .catch(() => alert('Failed to delete user.'))
+  }, [fetchUsers])
 
   // -------------------------------------------------------------------------
   // Render
@@ -496,6 +522,13 @@ export default function App() {
               >
                 👤 Enroll New Face
               </button>
+              <button
+                className="users-btn"
+                onClick={() => { setShowUsers(v => !v); if (!showUsers) fetchUsers() }}
+                disabled={status !== 'Online'}
+              >
+                👥 Users {users.length > 0 ? `(${users.length})` : ''}
+              </button>
             </>
           ) : (
             <button className="cancel-btn" onClick={cancelEnrollment}>
@@ -503,6 +536,34 @@ export default function App() {
             </button>
           )}
         </div>
+
+        {/* ── Users dashboard panel ── */}
+        {showUsers && !isEnrolling && (
+          <div className="users-panel">
+            <div className="users-panel-header">
+              <span>👥 Enrolled Users</span>
+              <button className="users-panel-close" onClick={() => setShowUsers(false)}>✕</button>
+            </div>
+            {usersLoading ? (
+              <p className="users-empty">Loading…</p>
+            ) : users.length === 0 ? (
+              <p className="users-empty">No users enrolled yet.</p>
+            ) : (
+              <ul className="users-list">
+                {users.map(name => (
+                  <li key={name} className="user-card">
+                    <span className="user-name">🧑 {name}</span>
+                    <button
+                      className="delete-btn"
+                      onClick={() => deleteUser(name)}
+                      title={`Delete ${name}`}
+                    >🗑</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </main>
     </div>
   )

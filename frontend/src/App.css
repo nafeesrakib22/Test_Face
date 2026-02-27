@@ -95,7 +95,8 @@ header {
   left: 0;
   width: 100%;
   height: 100%;
-  pointer-events: none;   /* clicks pass through to the video element */
+  pointer-events: none;
+  /* clicks pass through to the video element */
 }
 
 /* Progress bar pinned to the bottom of the video box */
@@ -254,7 +255,117 @@ button:disabled {
 
 /* Animations */
 @keyframes pulse {
-  0%   { opacity: 1; }
-  50%  { opacity: 0.6; }
-  100% { opacity: 1; }
+  0% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+/* ── Users button ────────────────────────────────────────────────────── */
+.users-btn {
+  background-color: rgba(163, 113, 247, 0.15);
+  border-color: #a371f7;
+  color: #d2a8ff;
+}
+
+.users-btn:hover:not(:disabled) {
+  background-color: #a371f7;
+  color: #fff;
+}
+
+/* ── Users dashboard panel ───────────────────────────────────────────── */
+.users-panel {
+  margin-top: 20px;
+  background-color: var(--panel-bg);
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  overflow: hidden;
+  text-align: left;
+}
+
+.users-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background-color: rgba(163, 113, 247, 0.1);
+  border-bottom: 1px solid #30363d;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #d2a8ff;
+}
+
+.users-panel-close {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  background: transparent;
+  border-color: #30363d;
+  color: #8b949e;
+}
+
+.users-panel-close:hover {
+  background-color: rgba(218, 54, 51, 0.2);
+  border-color: var(--accent-red);
+  color: #f85149;
+}
+
+.users-empty {
+  padding: 20px;
+  color: #8b949e;
+  text-align: center;
+  font-style: italic;
+  margin: 0;
+}
+
+.users-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.user-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background-color: rgba(255, 255, 255, 0.03);
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  transition: background-color 0.15s;
+}
+
+.user-card:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.user-name {
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.delete-btn {
+  padding: 5px 10px;
+  font-size: 1rem;
+  background-color: rgba(218, 54, 51, 0.1);
+  border-color: rgba(218, 54, 51, 0.4);
+  color: #f85149;
+  border-radius: 6px;
+  min-width: unset;
+}
+
+.delete-btn:hover {
+  background-color: var(--accent-red);
+  border-color: var(--accent-red);
+  color: #fff;
 }
