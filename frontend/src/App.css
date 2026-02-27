@@ -402,6 +402,12 @@ button:disabled {
   font-weight: 500;
 }
 
+.seen-active {
+  color: #3fb950;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .seen-never {
   color: #484f58;
   font-style: italic;

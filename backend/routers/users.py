@@ -17,8 +17,8 @@ def list_users():
       enrolled_at      – ISO-8601 UTC timestamp from first .npy file mtime
       last_seen        – ISO-8601 UTC timestamp of last confident identification
                          (null if not seen since server start)
-      recognition_count – total identifications since server start
     """
+    now    = datetime.now(timezone.utc)
     result = []
     for name in sorted(known_faces.keys()):
         # Enrolled date: mtime of the first matching .npy file
@@ -30,10 +30,17 @@ def list_users():
                     enrolled_at = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
                     break
 
+        ls_str    = last_seen.get(name)
+        is_active = False
+        if ls_str:
+            delta     = (now - datetime.fromisoformat(ls_str)).total_seconds()
+            is_active = delta < 3.0   # identified within the last 3 seconds
+
         result.append({
             "name":        name,
             "enrolled_at": enrolled_at,
-            "last_seen":   last_seen.get(name),
+            "last_seen":   ls_str,
+            "is_active":   is_active,
         })
 
     return {"users": result}

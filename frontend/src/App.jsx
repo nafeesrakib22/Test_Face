@@ -424,6 +424,13 @@ export default function App() {
       .finally(() => setUsersLoading(false))
   }, [])
 
+  // Poll every 3 s while the users panel is open so active status updates live
+  useEffect(() => {
+    if (!showUsers) return
+    const id = setInterval(fetchUsers, 3000)
+    return () => clearInterval(id)
+  }, [showUsers, fetchUsers])
+
   const deleteUser = useCallback((name) => {
     if (!window.confirm(`Delete "${name}" from the face database?`)) return
     fetch(`${BACKEND_URL}/users/${encodeURIComponent(name)}`, { method: 'DELETE' })
@@ -561,12 +568,14 @@ export default function App() {
                   <tbody>
                     {users.map(u => (
                       <tr key={u.name}>
-                        <td className="user-name-cell">🧑 {u.name}</td>
+                        <td className="user-name-cell">{u.name}</td>
                         <td className="user-meta-cell">{u.enrolled_at ? timeAgo(u.enrolled_at) : '—'}</td>
                         <td className="user-meta-cell">
-                          {u.last_seen
-                            ? <span className="seen-recent">{timeAgo(u.last_seen)}</span>
-                            : <span className="seen-never">Never</span>}
+                          {u.is_active
+                            ? <span className="seen-active">🟢 Active</span>
+                            : u.last_seen
+                              ? <span className="seen-recent">{timeAgo(u.last_seen)}</span>
+                              : <span className="seen-never">Never</span>}
                         </td>
                         <td>
                           <button
