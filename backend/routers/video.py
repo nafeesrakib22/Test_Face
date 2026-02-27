@@ -41,13 +41,13 @@ async def ws_recognize(websocket: WebSocket):
                 latest_frame = data   # overwrite — only the newest frame matters
                 frame_ready.set()
         except WebSocketDisconnect:
-            frame_ready.set()         # unblock the processor so it can exit
+            latest_frame = None       # signal processor to exit cleanly
+            frame_ready.set()
 
     recv_task = asyncio.create_task(receive_frames())
 
     try:
         while True:
-            # Block until at least one frame has arrived (or disconnect)
             await frame_ready.wait()
             frame_ready.clear()
 
@@ -57,17 +57,16 @@ async def ws_recognize(websocket: WebSocket):
             if frame is None:
                 break   # disconnected
 
-            # Run CPU-bound inference without blocking the event loop.
-            # While this runs in the thread pool the receiver coroutine
-            # continues to update latest_frame with newer data, so the
-            # next iteration always picks up the most recent frame.
             result = await loop.run_in_executor(
                 _inference_executor,
                 process_recognition_frame,
                 frame,
                 state,
             )
-            await websocket.send_text(json.dumps(result))
+            try:
+                await websocket.send_text(json.dumps(result))
+            except Exception:
+                break   # client disconnected between inference and send
 
     except WebSocketDisconnect:
         pass

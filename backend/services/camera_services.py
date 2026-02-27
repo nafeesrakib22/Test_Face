@@ -4,17 +4,21 @@ import mediapipe as mp
 import onnxruntime as ort
 import os
 from collections import deque, Counter
+from datetime import datetime, timezone
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from backend import config
 
 # Global Engine States
-known_faces = {}
-ort_session = None
-detector = None
-landmarker = None
+known_faces      = {}
+ort_session      = None
+detector         = None
+landmarker       = None
 enrollment_status = {"name": None, "progress": 0, "complete": False}
-stabilizer = None
+stabilizer       = None
+
+# Per-user activity stats
+last_seen : dict[str, str] = {}   # ISO-8601 UTC timestamp, persisted to disk
 
 # ---------------------------------------------------------------------------
 # Identity Stabilizer
@@ -109,6 +113,7 @@ def load_resources():
 
     # Face database (.npy centroids)
     _reload_face_db()
+    _load_last_seen()
 
     # BlazeFace detector
     base_options = python.BaseOptions(model_asset_path=config.DETECTOR_MODEL_PATH)
@@ -144,6 +149,30 @@ def _reload_face_db():
                     known_faces[name] = []
                 known_faces[name].append(vec)
 
+
+_LAST_SEEN_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'last_seen.json')
+
+
+def _save_last_seen():
+    """Persist last_seen to disk so timestamps survive server restarts."""
+    try:
+        os.makedirs(os.path.dirname(_LAST_SEEN_PATH), exist_ok=True)
+        import json as _json
+        with open(_LAST_SEEN_PATH, 'w') as f:
+            _json.dump(last_seen, f)
+    except Exception:
+        pass
+
+
+def _load_last_seen():
+    """Restore last_seen from disk on startup."""
+    try:
+        if os.path.exists(_LAST_SEEN_PATH):
+            import json as _json
+            with open(_LAST_SEEN_PATH) as f:
+                last_seen.update(_json.load(f))
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +437,11 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
         raw     = best_n if best_s > config.THRESHOLD else "Unknown"
         display = stabilizer.update(raw)
 
+        # Track last-seen timestamp for the identified user
+        if display != "Unknown":
+            last_seen[display] = datetime.now(timezone.utc).isoformat()
+            _save_last_seen()
+
         return {
             "status":     "identified" if display != "Unknown" else "unknown",
             "name":       display,
@@ -415,6 +449,7 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
             "box":        box,
             "blurry":     False,
         }
+
 
     # ══════════════════════════════════════════════════════════════════════════
     # PRE-LIVENESS PATH — BlazeFace only (fast, cheap)

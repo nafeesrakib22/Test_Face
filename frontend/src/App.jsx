@@ -537,7 +537,6 @@ export default function App() {
           )}
         </div>
 
-        {/* ── Users dashboard panel ── */}
         {showUsers && !isEnrolling && (
           <div className="users-panel">
             <div className="users-panel-header">
@@ -549,18 +548,38 @@ export default function App() {
             ) : users.length === 0 ? (
               <p className="users-empty">No users enrolled yet.</p>
             ) : (
-              <ul className="users-list">
-                {users.map(name => (
-                  <li key={name} className="user-card">
-                    <span className="user-name">🧑 {name}</span>
-                    <button
-                      className="delete-btn"
-                      onClick={() => deleteUser(name)}
-                      title={`Delete ${name}`}
-                    >🗑</button>
-                  </li>
-                ))}
-              </ul>
+              <div className="users-table-wrap">
+                <table className="users-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Enrolled</th>
+                      <th>Last Seen</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map(u => (
+                      <tr key={u.name}>
+                        <td className="user-name-cell">🧑 {u.name}</td>
+                        <td className="user-meta-cell">{u.enrolled_at ? timeAgo(u.enrolled_at) : '—'}</td>
+                        <td className="user-meta-cell">
+                          {u.last_seen
+                            ? <span className="seen-recent">{timeAgo(u.last_seen)}</span>
+                            : <span className="seen-never">Never</span>}
+                        </td>
+                        <td>
+                          <button
+                            className="delete-btn"
+                            onClick={() => deleteUser(u.name)}
+                            title={`Delete ${u.name}`}
+                          >🗑</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         )}
@@ -572,7 +591,23 @@ export default function App() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Convert an ISO-8601 UTC timestamp to a human-friendly relative string. */
+function timeAgo(isoStr) {
+  if (!isoStr) return '—'
+  const secs = Math.round((Date.now() - new Date(isoStr).getTime()) / 1000)
+  if (secs < 5) return 'just now'
+  if (secs < 60) return `${secs}s ago`
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.round(hrs / 24)
+  return `${days}d ago`
+}
+
 function buildStatusMsg(data) {
+
   switch (data.status) {
     case 'scanning': return 'Scanning...'
     case 'multiple': return '⚠️ Multiple faces detected'
