@@ -26,3 +26,7 @@ EAR_THRESHOLD       = 0.22   # EAR below this = eye closed
 BLINK_CONSEC_FRAMES = 3      # frames eye must be closed to count as a blink
 LIVENESS_TIMEOUT    = 300    # frames before challenge resets (~10s at 30fps)
 REQUIRED_BLINKS     = 3      # blinks needed to pass liveness
+
+# Face alignment — ArcFace standard eye target positions (112×112 output)
+ALIGN_LEFT_EYE  = (38.2946, 51.6963)
+ALIGN_RIGHT_EYE = (73.5318, 51.6963)

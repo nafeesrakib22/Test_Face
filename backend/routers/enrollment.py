@@ -34,7 +34,10 @@ async def ws_enroll(websocket: WebSocket, name: str = Query(..., min_length=1)):
     except WebSocketDisconnect:
         pass
     finally:
-        await websocket.close()
+        try:
+            await websocket.close()
+        except Exception:
+            pass  # already closed by client or on WebSocketDisconnect path
 
 
 @router.get("/enroll_status")
