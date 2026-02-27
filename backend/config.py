@@ -8,6 +8,7 @@ CAMERA_INDEX = 2
 ONNX_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'edgeface_xs_gamma_06.onnx')
 DETECTOR_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'blaze_face_short_range.tflite')
 LANDMARKER_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'face_landmarker.task')
+
 DB_PATH = os.path.join(BASE_DIR, 'data', 'face_db')
 
 THRESHOLD = 0.65
