@@ -108,15 +108,7 @@ def load_resources():
     )
 
     # Face database (.npy centroids)
-    known_faces.clear()
-    if os.path.exists(config.DB_PATH):
-        for filename in os.listdir(config.DB_PATH):
-            if filename.endswith('.npy'):
-                name = filename.split('_')[0]
-                vec  = np.load(os.path.join(config.DB_PATH, filename))
-                if name not in known_faces:
-                    known_faces[name] = []
-                known_faces[name].append(vec)
+    _reload_face_db()
 
     # BlazeFace detector
     base_options = python.BaseOptions(model_asset_path=config.DETECTOR_MODEL_PATH)
@@ -131,6 +123,27 @@ def load_resources():
     landmarker = vision.FaceLandmarker.create_from_options(lm_options)
 
     stabilizer = IdentityStabilizer(maxlen=config.BUFFER_SIZE)
+
+
+def _reload_face_db():
+    """
+    Refresh the in-memory face database from disk WITHOUT recreating model
+    sessions. Use this after enrollment or user deletion.
+
+    Calling the full load_resources() for DB-only updates spawns new
+    MediaPipe / ONNX thread pools and leaves zombie threads from the old
+    sessions, causing progressive CPU contention and tracking lag.
+    """
+    known_faces.clear()
+    if os.path.exists(config.DB_PATH):
+        for filename in os.listdir(config.DB_PATH):
+            if filename.endswith('.npy'):
+                name = filename.split('_')[0]
+                vec  = np.load(os.path.join(config.DB_PATH, filename))
+                if name not in known_faces:
+                    known_faces[name] = []
+                known_faces[name].append(vec)
+
 
 
 # ---------------------------------------------------------------------------
@@ -619,7 +632,7 @@ def process_enrollment_frame(jpeg_bytes: bytes) -> dict:
 
     if state["phase_idx"] >= len(PHASES) and len(state["embeddings"]) == TOTAL_SAMPLES:
         _save_enrollment(state["name"], state["embeddings"])
-        load_resources()
+        _reload_face_db()   # refresh DB only — do NOT recreate model sessions
         enrollment_status["complete"] = True
         return {
             "status":      "complete",

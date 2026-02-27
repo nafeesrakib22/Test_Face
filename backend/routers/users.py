@@ -1,6 +1,6 @@
 import os
 from fastapi import APIRouter, HTTPException
-from backend.services.camera_services import known_faces, load_resources
+from backend.services.camera_services import known_faces, _reload_face_db
 from backend import config
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -29,7 +29,7 @@ def delete_user(name: str):
                 os.remove(os.path.join(config.DB_PATH, filename))
                 removed.append(filename)
 
-    # Reload face DB into memory (and re-init models)
-    load_resources()
+    # Reload face DB in-memory — model sessions are NOT recreated
+    _reload_face_db()
 
     return {"status": "deleted", "user": name, "files_removed": removed}
