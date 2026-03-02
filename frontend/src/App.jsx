@@ -5,8 +5,10 @@ const PROTO = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 const BACKEND_WS = `${PROTO}//${window.location.host}`
 const BACKEND_URL = window.location.origin
 
-// How many frames per second we send to the backend
-const TARGET_FPS = 30
+// How many frames per second we send to the backend.
+// Note: the <video> display always runs at full camera fps — this only
+// controls how often annotations are sent to the backend for processing.
+const TARGET_FPS = 15
 
 // Status → colour mapping for the bounding-box overlay
 const STATUS_COLORS = {

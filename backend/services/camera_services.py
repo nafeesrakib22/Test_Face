@@ -363,6 +363,15 @@ def make_recognition_state() -> dict:
         "liveness_confirmed": False,
         "blink_detector":    BlinkDetector(),
         "liveness_timeout":  0,
+        # CPU throttling — post-liveness
+        "frame_counter":     0,
+        "last_result":       None,
+        "last_name":         None,
+        # Face-loss grace period (avoid resetting on a single missed frame)
+        "face_lost_counter": 0,
+        # CPU throttling — pre-liveness
+        "sharp_counter":     0,    # throttle is_sharp() Laplacian check
+        "last_blurry":       False, # cached result from last is_sharp() call
     }
 
 
@@ -393,38 +402,89 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
     # POST-LIVENESS PATH — FaceLandmarker + EdgeFace only (no BlazeFace)
     # ══════════════════════════════════════════════════════════════════════════
     if state["liveness_confirmed"]:
-        lm_result = landmarker.detect(mp_img)
+        state["frame_counter"] += 1
+        is_inference_frame = (state["frame_counter"] % config.INFERENCE_SKIP == 0)
 
-        if not lm_result.face_landmarks:
-            # Face lost — full reset, return to pre-liveness scan
-            state["stability"]          = 0
-            state["prev_box"]           = None
-            state["liveness_confirmed"] = False
-            state["liveness_timeout"]   = 0
-            state["blink_detector"].reset()
-            stabilizer.reset()
-            return {"status": "scanning", "name": None, "confidence": 0.0, "box": None}
+        # ── Skipped frame: BlazeFace only for responsive box tracking ─────────
+        if not is_inference_frame and state["last_result"] is not None:
+            bf_res = detector.detect(mp_img)
+            if not bf_res.detections:
+                state["face_lost_counter"] += 1
+                if state["face_lost_counter"] >= 5:  # ~333ms grace at 15fps
+                    state["stability"]          = 0
+                    state["prev_box"]           = None
+                    state["liveness_confirmed"] = False
+                    state["liveness_timeout"]   = 0
+                    state["face_lost_counter"]  = 0
+                    state["blink_detector"].reset()
+                    stabilizer.reset()
+                    return {"status": "scanning", "name": None, "confidence": 0.0, "box": None}
+                # Brief miss — hold the last result
+                return state["last_result"]
 
-        landmarks = lm_result.face_landmarks[0]
+            state["face_lost_counter"] = 0
+            det  = bf_res.detections[0].bounding_box
+            curr = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
+            prev = state.get("prev_box")
+            prev = curr if prev is None else (prev * 0.85) + (curr * 0.15)
+            state["prev_box"] = prev
+            sx, sy, sw, sh = prev
+            cx, cy = sx + sw / 2, sy + sh / 2
+            fresh_box = {
+                "x1": int(max(0, cx - sw * 0.625)),
+                "y1": int(max(0, cy - sh * 0.625)),
+                "x2": int(min(w, cx + sw * 0.625)),
+                "y2": int(min(h, cy + sh * 0.625)),
+            }
+            # Return cached identity result with fresh box position
+            return {**state["last_result"], "box": fresh_box}
 
-        # Derive + smooth bounding box from landmark extents
-        xs = [lm.x * w for lm in landmarks]
-        ys = [lm.y * h for lm in landmarks]
-        pad_x, pad_y = (max(xs) - min(xs)) * 0.15, (max(ys) - min(ys)) * 0.15
-        curr = np.array([min(xs) - pad_x, min(ys) - pad_y,
-                         (max(xs) - min(xs)) + 2 * pad_x,
-                         (max(ys) - min(ys)) + 2 * pad_y], dtype=float)
+        # ── Inference frame: BlazeFace for box + FaceLandmarker for crop ──────
+        # Use BlazeFace (same source as skip frames) to avoid box bounce.
+        bf_res = detector.detect(mp_img)
+        if not bf_res.detections:
+            state["face_lost_counter"] += 1
+            if state["face_lost_counter"] >= 5:
+                state["stability"]          = 0
+                state["prev_box"]           = None
+                state["liveness_confirmed"] = False
+                state["liveness_timeout"]   = 0
+                state["face_lost_counter"]  = 0
+                state["blink_detector"].reset()
+                stabilizer.reset()
+                return {"status": "scanning", "name": None, "confidence": 0.0, "box": None}
+            return state["last_result"] or {"status": "scanning", "name": None, "confidence": 0.0, "box": None}
+
+        state["face_lost_counter"] = 0
+
+        det  = bf_res.detections[0].bounding_box
+        curr = np.array([det.origin_x, det.origin_y, det.width, det.height], dtype=float)
         prev = state.get("prev_box")
         prev = curr if prev is None else (prev * 0.85) + (curr * 0.15)
         state["prev_box"] = prev
         sx, sy, sw, sh = prev
+        cx, cy = sx + sw / 2, sy + sh / 2
         box = {
-            "x1": int(max(0, sx)),      "y1": int(max(0, sy)),
-            "x2": int(min(w, sx + sw)), "y2": int(min(h, sy + sh)),
+            "x1": int(max(0, cx - sw * 0.625)),
+            "y1": int(max(0, cy - sh * 0.625)),
+            "x2": int(min(w, cx + sw * 0.625)),
+            "y2": int(min(h, cy + sh * 0.625)),
         }
 
-        # Landmark-aligned crop → EdgeFace embedding
-        aligned = _align_face(frame, landmarks, w, h)
+        # FaceLandmarker for crop alignment only (not box)
+        lm_result = landmarker.detect(mp_img)
+        if lm_result.face_landmarks:
+            # Happy path — align crop using landmarks
+            landmarks = lm_result.face_landmarks[0]
+            aligned   = _align_face(frame, landmarks, w, h)
+        else:
+            # No landmarks (e.g. blink frame) — fall back to plain BlazeFace crop
+            x1, y1, x2, y2 = box["x1"], box["y1"], box["x2"], box["y2"]
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0:
+                return {**state["last_result"], "box": box} if state["last_result"] else \
+                       {"status": "scanning", "name": None, "confidence": 0.0, "box": box}
+            aligned = cv2.resize(crop, (112, 112))
         emb     = get_embedding_onnx(aligned)
 
         best_s, best_n = -1.0, "Unknown"
@@ -437,18 +497,21 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
         raw     = best_n if best_s > config.THRESHOLD else "Unknown"
         display = stabilizer.update(raw)
 
-        # Track last-seen timestamp for the identified user
-        if display != "Unknown":
+        # Track last-seen timestamp — only write to disk when the name changes
+        if display != "Unknown" and display != state["last_name"]:
             last_seen[display] = datetime.now(timezone.utc).isoformat()
             _save_last_seen()
+            state["last_name"] = display
 
-        return {
+        result = {
             "status":     "identified" if display != "Unknown" else "unknown",
             "name":       display,
             "confidence": round(float(best_s), 4),
             "box":        box,
             "blurry":     False,
         }
+        state["last_result"] = result
+        return result
 
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -488,7 +551,13 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
     box = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
 
     crop_check = frame[y1:y2, x1:x2]
-    blurry = bool(crop_check.size > 0 and is_sharp(crop_check) < config.FRAME_BLUR_THRESHOLD)
+    # Only compute is_sharp() every 5th frame — it's just a cosmetic blur warning
+    state["sharp_counter"] = (state["sharp_counter"] + 1) % 5
+    if state["sharp_counter"] == 0:
+        state["last_blurry"] = bool(
+            crop_check.size > 0 and is_sharp(crop_check) < config.FRAME_BLUR_THRESHOLD
+        )
+    blurry = state["last_blurry"]
 
     if state["stability"] < config.STABILITY_FRAMES:
         return {"status": "stabilizing", "name": None, "confidence": 0.0, "box": box, "blurry": blurry}

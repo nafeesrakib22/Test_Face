@@ -24,8 +24,14 @@ SAMPLES_PER_PHASE = 40
 
 # Liveness detection (blink challenge)
 EAR_THRESHOLD       = 0.22   # EAR below this = eye closed
-BLINK_CONSEC_FRAMES = 3      # frames eye must be closed to count as a blink
-LIVENESS_TIMEOUT    = 300    # frames before challenge resets (~10s at 30fps)
+BLINK_CONSEC_FRAMES = 2      # frames eye must be closed to count as a blink
+LIVENESS_TIMEOUT    = 225    # frames before challenge resets (~15s at 15fps)
+
+# CPU throttling — run heavy inference every Nth post-liveness frame.
+# Skipped frames return the cached previous result instantly.
+# 3 = ~5fps effective inference, which is plenty for stable recognition.
+INFERENCE_SKIP = 3
+
 REQUIRED_BLINKS     = 3      # blinks needed to pass liveness
 
 # Face alignment — ArcFace standard eye target positions (112×112 output)
