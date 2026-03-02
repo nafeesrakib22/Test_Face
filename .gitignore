@@ -34,6 +34,7 @@ frontend/coverage/
 
 # --- Face Database (Privacy Protection) ---
 backend/data/face_db/
+backend/data/last_seen.json
 
 # --- Docker ---
 # Keep tracked: Dockerfile.backend, Dockerfile.frontend, docker-compose.yml, nginx.conf, .dockerignore
