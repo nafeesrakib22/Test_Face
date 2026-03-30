@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.routers import video, enrollment, session, users
+from backend.routers import video, enrollment, session, users, events
 from backend.services.camera_services import load_resources
 
 # Load AI models and face database on startup
@@ -20,6 +20,7 @@ app.include_router(video.router)
 app.include_router(enrollment.router)
 app.include_router(session.router)
 app.include_router(users.router)
+app.include_router(events.router)
 
 
 @app.get("/")

@@ -164,6 +164,37 @@ def _save_last_seen():
         pass
 
 
+_UNKNOWN_EVENTS_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'unknown_events.json')
+
+
+def _log_unknown_event():
+    """Log a sighting of an unknown person that lasted more than 30 seconds."""
+    try:
+        os.makedirs(os.path.dirname(_UNKNOWN_EVENTS_PATH), exist_ok=True)
+        import json as _json
+        import uuid as _uuid
+        
+        events = []
+        if os.path.exists(_UNKNOWN_EVENTS_PATH):
+            with open(_UNKNOWN_EVENTS_PATH, 'r') as f:
+                events = _json.load(f)
+        
+        new_event = {
+            "id": str(_uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "unknown_person",
+            "acknowledged": False
+        }
+        
+        events.append(new_event)
+        
+        with open(_UNKNOWN_EVENTS_PATH, 'w') as f:
+            _json.dump(events, f, indent=2)
+            
+    except Exception:
+        pass
+
+
 def _load_last_seen():
     """Restore last_seen from disk on startup."""
     try:
@@ -372,6 +403,9 @@ def make_recognition_state() -> dict:
         # CPU throttling — pre-liveness
         "sharp_counter":     0,    # throttle is_sharp() Laplacian check
         "last_blurry":       False, # cached result from last is_sharp() call
+        # Unknown alert tracking
+        "unknown_since":     None,  # DateTime when "Unknown" was first stabilized
+        "alert_logged":      False, # prevent multiple logs for the same session
     }
 
 
@@ -502,6 +536,21 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
             last_seen[display] = datetime.now(timezone.utc).isoformat()
             _save_last_seen()
             state["last_name"] = display
+
+        # --- Unknown person duration tracking & logging ---
+        if display == "Unknown":
+            if state["unknown_since"] is None:
+                state["unknown_since"] = datetime.now(timezone.utc)
+            elif not state["alert_logged"]:
+                elapsed = (datetime.now(timezone.utc) - state["unknown_since"]).total_seconds()
+                if elapsed >= 30:
+                    _log_unknown_event()
+                    state["alert_logged"] = True
+        else:
+            # Reset if a known face (or stabilizing) is seen
+            state["unknown_since"] = None
+            state["alert_logged"] = False
+        # ----------------------------------------------------
 
         result = {
             "status":     "identified" if display != "Unknown" else "unknown",
