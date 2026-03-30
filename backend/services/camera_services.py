@@ -543,7 +543,7 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
                 state["unknown_since"] = datetime.now(timezone.utc)
             elif not state["alert_logged"]:
                 elapsed = (datetime.now(timezone.utc) - state["unknown_since"]).total_seconds()
-                if elapsed >= 30:
+                if elapsed >= 10:
                     _log_unknown_event()
                     state["alert_logged"] = True
         else:
