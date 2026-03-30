@@ -611,52 +611,58 @@ def process_recognition_frame(jpeg_bytes: bytes, state: dict) -> dict:
     if state["stability"] < config.STABILITY_FRAMES:
         return {"status": "stabilizing", "name": None, "confidence": 0.0, "box": box, "blurry": blurry}
 
-    # ── Stage 2: Blink liveness challenge ────────────────────────────────────
-    if blurry:
-        return {
-            "status": "blink_challenge",
-            "name": None, "confidence": 0.0, "box": box,
-            "blurry": True,
-            "instruction": "⚠️ Blurry frame — hold still",
-        }
+    # ── Stage 2: Blink liveness challenge (BYPASSED) ─────────────────────────
+    # if blurry:
+    #     return {
+    #         "status": "blink_challenge",
+    #         "name": None, "confidence": 0.0, "box": box,
+    #         "blurry": True,
+    #         "instruction": "⚠️ Blurry frame — hold still",
+    #     }
 
-    lm_result = landmarker.detect(mp_img)
+    # AUTOMATIC BYPASS: Set liveness confirmed immediately once face is stable
+    state["liveness_confirmed"] = True
+    state["liveness_timeout"]   = 0
+    return process_recognition_frame(jpeg_bytes, state)
 
-    if lm_result.face_landmarks:
-        landmarks     = lm_result.face_landmarks[0]
-        ear           = _compute_ear(landmarks)
-        blinks_so_far = state["blink_detector"].blink_count
-        state["blink_detector"].update(ear)
-        blinks_so_far = state["blink_detector"].blink_count
-
-        if blinks_so_far >= config.REQUIRED_BLINKS:
-            state["liveness_confirmed"] = True
-            state["liveness_timeout"]   = 0
-            # Immediately enter post-liveness path on the same frame
-            # by recursing once (tail-call style, state is now confirmed)
-            return process_recognition_frame(jpeg_bytes, state)
-
-        state["liveness_timeout"] += 1
-        if state["liveness_timeout"] >= config.LIVENESS_TIMEOUT:
-            state["liveness_timeout"] = 0
-            state["blink_detector"].reset()
-            return {
-                "status": "blink_challenge",
-                "name": None, "confidence": 0.0, "box": box, "blurry": False,
-                "instruction": "No blink detected. Please blink naturally.",
-            }
-        remaining = config.REQUIRED_BLINKS - blinks_so_far
-        return {
-            "status": "blink_challenge",
-            "name": None, "confidence": 0.0, "box": box, "blurry": False,
-            "instruction": f"Blink {remaining} more time{'s' if remaining > 1 else ''} {'👁' * remaining}",
-        }
-    else:
-        return {
-            "status": "blink_challenge",
-            "name": None, "confidence": 0.0, "box": box, "blurry": False,
-            "instruction": f"Blink {config.REQUIRED_BLINKS} times to verify",
-        }
+    # --- Original Blink Challenge Code (Commented Out) ---
+    # lm_result = landmarker.detect(mp_img)
+    #
+    # if lm_result.face_landmarks:
+    #     landmarks     = lm_result.face_landmarks[0]
+    #     ear           = _compute_ear(landmarks)
+    #     blinks_so_far = state["blink_detector"].blink_count
+    #     state["blink_detector"].update(ear)
+    #     blinks_so_far = state["blink_detector"].blink_count
+    #
+    #     if blinks_so_far >= config.REQUIRED_BLINKS:
+    #         state["liveness_confirmed"] = True
+    #         state["liveness_timeout"]   = 0
+    #         # Immediately enter post-liveness path on the same frame
+    #         # by recursing once (tail-call style, state is now confirmed)
+    #         return process_recognition_frame(jpeg_bytes, state)
+    #
+    #     state["liveness_timeout"] += 1
+    #     if state["liveness_timeout"] >= config.LIVENESS_TIMEOUT:
+    #         state["liveness_timeout"] = 0
+    #         state["blink_detector"].reset()
+    #         return {
+    #             "status": "blink_challenge",
+    #             "name": None, "confidence": 0.0, "box": box, "blurry": False,
+    #             "instruction": "No blink detected. Please blink naturally.",
+    #         }
+    #     remaining = config.REQUIRED_BLINKS - blinks_so_far
+    #     return {
+    #         "status": "blink_challenge",
+    #         "name": None, "confidence": 0.0, "box": box, "blurry": False,
+    #         "instruction": f"Blink {remaining} more time{'s' if remaining > 1 else ''} {'👁' * remaining}",
+    #     }
+    # else:
+    #     return {
+    #         "status": "blink_challenge",
+    #         "name": None, "confidence": 0.0, "box": box, "blurry": False,
+    #         "instruction": f"Blink {config.REQUIRED_BLINKS} times to verify",
+    #     }
 
 
 
