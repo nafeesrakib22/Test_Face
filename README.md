@@ -11,6 +11,10 @@ A high-performance, background-agnostic face recognition pipeline optimized for 
 - **Identity Stabilization:** Utilizes a 12-frame hysteresis buffer and temporal smoothing to prevent identity "flickering."
 - **Single-Face Enforcement:** Security logic that denies access and provides visual warnings if multiple faces are detected in the frame.
 - **Box Smoothing (Lerp):** Implements Linear Interpolation for bounding box coordinates to reduce visual jitter during detection.
+- **3D Pose Estimation (solvePnP):** Uses MediaPipe FaceMesh and OpenCV's `solvePnP` for precise, degree-accurate head pose guidance during enrollment.
+- **ArcFace Alignment:** Performs an Affine 2D transform based on eye landmarks to properly align the face before inference, maximizing recognition accuracy.
+- **Event Logging & Security Alerts:** Persistently tracks "Last Seen" timestamps for known users and logs "Unknown Person" alerts if an unrecognized face loiters for >10 seconds.
+- **Liveness Detection Infrastructure:** Built-in Eye Aspect Ratio (EAR) blink detection logic to prevent photo/video spoofing.
 
 ---
 
@@ -21,7 +25,9 @@ Test_Face/
 ├── backend/
 │   ├── main.py                # FastAPI Backend + AI Inference
 │   ├── models/                # ONNX and TFLite models
-│   └── data/face_db/          # Enrolled biometric templates (.npy)
+│   ├── services/              # AI Services (camera, recognition, liveness)
+│   ├── routers/               # API Endpoints (video, events, users)
+│   └── data/                  # Face database (.npy) and JSON event logs
 ├── frontend/
 │   ├── src/                   # React Components & Logic
 │   ├── public/
