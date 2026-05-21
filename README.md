@@ -125,3 +125,34 @@ python backend/benchmark_multi_profile.py
 ```
 
 ---
+
+## 🤖 Optional — Telegram Alerts via OpenClaw
+
+> This is an **optional integration** for users who have [OpenClaw](https://openclaw.ai) installed and a Telegram bot configured.
+
+This integration adds two capabilities:
+- **On-demand query:** Ask your Telegram bot *"When was Alice last seen?"* and it responds with live data from the app.
+- **Proactive alert:** If an unrecognized face is detected for more than 30 seconds, your bot automatically sends you a Telegram alert.
+
+### Prerequisites
+- OpenClaw installed and running locally
+- A Telegram bot created via [@BotFather](https://t.me/botfather) and connected to OpenClaw
+- The app running (Docker or local dev), backend accessible at `http://localhost:8000`
+
+### Setup
+
+The skill is included in this repo inside the `facewatch/` directory. Copy it into your OpenClaw skills folder:
+
+```bash
+cp -r facewatch ~/.openclaw/skills/facewatch
+openclaw skills refresh
+```
+
+### 🔄 How It All Works
+
+1. **Backend** writes an event to `backend/data/unknown_events.json` when an unknown face is seen for >30 continuous seconds.
+2. **OpenClaw heartbeat** polls `GET /events/unknown` every 30 seconds.
+3. **On alert found**, the skill sends a Telegram message and calls the `ack` endpoint to prevent repeat notifications.
+4. **On-demand**, you can ask the bot *"Was Bob seen today?"* or *"Who has been seen this hour?"* at any time.
+
+---
